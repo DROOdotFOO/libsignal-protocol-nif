@@ -4,6 +4,12 @@ defmodule LibsignalProtocol do
   Provides a clean, idiomatic interface for secure messaging.
   """
 
+  # Suppress warnings for undefined NIF functions during development
+  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :init, 0}}
+  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :create_session, 1}}
+  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :create_session, 2}}
+  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :generate_identity_key_pair, 0}}
+
   # No @on_load - we'll use the existing Erlang NIF module directly
 
   @doc """
