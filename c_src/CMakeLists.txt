@@ -87,18 +87,10 @@ set_target_properties(libsignal_protocol_nif_v2 PROPERTIES
     PREFIX ""  # Remove the "lib" prefix
 )
 
-# Set compile flags based on platform
-if(APPLE)
-    set_target_properties(signal_nif PROPERTIES
-        SUFFIX ".dylib"
-    )
-    set_target_properties(libsignal_protocol_nif PROPERTIES
-        SUFFIX ".dylib"
-    )
-    set_target_properties(libsignal_protocol_nif_v2 PROPERTIES
-        SUFFIX ".dylib"
-    )
-elseif(UNIX)
+# Set compile flags based on platform.
+# Note: BEAM expects .so for NIFs on macOS too, so APPLE is intentionally
+# folded into the UNIX branch — do not split out a .dylib case.
+if(UNIX)
     set_target_properties(signal_nif PROPERTIES
         SUFFIX ".so"
     )
