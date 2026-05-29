@@ -25,9 +25,13 @@ typedef struct {
     
     // Previous sending chain length (for header)
     unsigned int prev_send_length;
-    
+
     // Session established flag
     bool initialized;
+
+    // True once dh_recv_public is a real peer key. Bob starts false until
+    // Alice's first message arrives and triggers the receive ratchet.
+    bool dh_recv_initialized;
 } double_ratchet_state_t;
 
 // Constants for Double Ratchet
@@ -102,7 +106,71 @@ static int dh_ratchet(double_ratchet_state_t *state, const unsigned char *remote
     sodium_memzero(dh_output, sizeof(dh_output));
     sodium_memzero(root_chain_input, sizeof(root_chain_input));
     sodium_memzero(kdf_output, sizeof(kdf_output));
-    
+
+    return 0;
+}
+
+// Double Ratchet receive-side ratchet step (per Signal DR spec section 3.5).
+// Two KDF passes from the same DH inputs:
+//   1. Derive new recv_chain_key from KDF(root, DH(my_current_priv, their_new_pub))
+//   2. Generate a fresh keypair and derive new send_chain_key from
+//      KDF(new_root, DH(my_new_priv, their_new_pub))
+// dh_ratchet() above only does step 2, which is correct for Alice's initial
+// send setup but wrong for any receive-triggered ratchet -- the receiver must
+// derive recv_chain_key first or decryption fails.
+static int dh_ratchet_recv(double_ratchet_state_t *state,
+                           const unsigned char *remote_public_key) {
+    unsigned char dh_output[crypto_box_BEFORENMBYTES];
+    unsigned char kdf_input[64];
+    unsigned char kdf_output[64];
+
+    // Step 1: receive ratchet using CURRENT dh_send_private
+    if (crypto_box_beforenm(dh_output, remote_public_key, state->dh_send_private) != 0) {
+        return -1;
+    }
+    memcpy(kdf_input, state->root_key, 32);
+    memcpy(kdf_input + 32, dh_output, 32);
+    if (crypto_generichash(kdf_output, 64, kdf_input, 64, NULL, 0) != 0) {
+        sodium_memzero(dh_output, sizeof(dh_output));
+        sodium_memzero(kdf_input, sizeof(kdf_input));
+        return -1;
+    }
+    memcpy(state->root_key, kdf_output, 32);
+    memcpy(state->recv_chain_key, kdf_output + 32, 32);
+
+    // Step 2: generate new keypair and derive new send chain
+    if (crypto_box_keypair(state->dh_send_public, state->dh_send_private) != 0) {
+        sodium_memzero(dh_output, sizeof(dh_output));
+        sodium_memzero(kdf_input, sizeof(kdf_input));
+        sodium_memzero(kdf_output, sizeof(kdf_output));
+        return -1;
+    }
+    if (crypto_box_beforenm(dh_output, remote_public_key, state->dh_send_private) != 0) {
+        sodium_memzero(dh_output, sizeof(dh_output));
+        sodium_memzero(kdf_input, sizeof(kdf_input));
+        sodium_memzero(kdf_output, sizeof(kdf_output));
+        return -1;
+    }
+    memcpy(kdf_input, state->root_key, 32);
+    memcpy(kdf_input + 32, dh_output, 32);
+    if (crypto_generichash(kdf_output, 64, kdf_input, 64, NULL, 0) != 0) {
+        sodium_memzero(dh_output, sizeof(dh_output));
+        sodium_memzero(kdf_input, sizeof(kdf_input));
+        sodium_memzero(kdf_output, sizeof(kdf_output));
+        return -1;
+    }
+    memcpy(state->root_key, kdf_output, 32);
+    memcpy(state->send_chain_key, kdf_output + 32, 32);
+    memcpy(state->dh_recv_public, remote_public_key, crypto_box_PUBLICKEYBYTES);
+
+    state->prev_send_length = state->send_message_number;
+    state->send_message_number = 0;
+    state->recv_message_number = 0;
+    state->dh_recv_initialized = true;
+
+    sodium_memzero(dh_output, sizeof(dh_output));
+    sodium_memzero(kdf_input, sizeof(kdf_input));
+    sodium_memzero(kdf_output, sizeof(kdf_output));
     return 0;
 }
 
@@ -990,77 +1058,96 @@ static ERL_NIF_TERM decrypt_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 }
 
 // Double Ratchet: Initialize session (replacing get_cache_stats)
+// Double Ratchet init (per Signal DR spec section 3.3).
+// Args: SharedSecret(64), RemoteIdentityPub(32), SelfIdentityPriv(32), IsAlice(int).
+// Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral). She does an
+//   initial send ratchet against the remote pub, populating send_chain_key.
+// Bob: RemoteIdentityPub is ignored. He stores his identity keypair and waits
+//   for Alice's first message before any chain key is derived; encrypt fails
+//   until then. This mirrors the Signal spec asymmetry: initiator sends first.
 static ERL_NIF_TERM get_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    if (argc != 3) {
+    if (argc != 4) {
         return enif_make_badarg(env);
     }
-    
-    ErlNifBinary shared_secret, remote_public_key;
+
+    ErlNifBinary shared_secret, remote_public_key, self_priv;
     int is_alice;
-    
+
     if (!enif_inspect_binary(env, argv[0], &shared_secret) ||
         !enif_inspect_binary(env, argv[1], &remote_public_key) ||
-        !enif_get_int(env, argv[2], &is_alice)) {
+        !enif_inspect_binary(env, argv[2], &self_priv) ||
+        !enif_get_int(env, argv[3], &is_alice)) {
         return enif_make_badarg(env);
     }
-    
-    // Validate input sizes
-    if (shared_secret.size != 64 || remote_public_key.size != crypto_box_PUBLICKEYBYTES) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_input_sizes"));
+
+    if (shared_secret.size != 64) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "invalid_shared_secret_size"));
     }
-    
-    // Initialize Double Ratchet state
+
     double_ratchet_state_t state;
     memset(&state, 0, sizeof(state));
-    
-    // Initialize root key from shared secret (first 32 bytes)
     memcpy(state.root_key, shared_secret.data, 32);
-    
+
     if (is_alice) {
-        // Alice generates initial DH key pair and performs first ratchet
+        if (remote_public_key.size != crypto_box_PUBLICKEYBYTES) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "invalid_remote_public_key_size"));
+        }
+        // Fresh ephemeral DH pair
         if (crypto_box_keypair(state.dh_send_public, state.dh_send_private) != 0) {
-            return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "key_generation_failed"));
         }
-        
-        // Perform initial DH ratchet
-        if (dh_ratchet(&state, remote_public_key.data) != 0) {
-            return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                                   enif_make_atom(env, "dh_ratchet_failed"));
-        }
-        
-        // Initialize receiving chain key from shared secret (last 32 bytes)
-        memcpy(state.recv_chain_key, shared_secret.data + 32, 32);
-    } else {
-        // Bob stores Alice's public key and initializes sending chain
         memcpy(state.dh_recv_public, remote_public_key.data, crypto_box_PUBLICKEYBYTES);
-        
-        // Initialize sending chain key from shared secret (last 32 bytes)
-        memcpy(state.send_chain_key, shared_secret.data + 32, 32);
-        
-        // Generate initial DH key pair (will be used when Bob first sends)
-        if (crypto_box_keypair(state.dh_send_public, state.dh_send_private) != 0) {
-            return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                                   enif_make_atom(env, "key_generation_failed"));
+        state.dh_recv_initialized = true;
+
+        // Initial send ratchet: KDF_RK(root, DH(alice_eph_priv, bob_pub))
+        unsigned char dh_out[crypto_box_BEFORENMBYTES];
+        if (crypto_box_beforenm(dh_out, state.dh_recv_public,
+                                state.dh_send_private) != 0) {
+            sodium_memzero(&state, sizeof(state));
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "dh_failed"));
         }
+        unsigned char kdf_in[64], kdf_out[64];
+        memcpy(kdf_in, state.root_key, 32);
+        memcpy(kdf_in + 32, dh_out, 32);
+        if (crypto_generichash(kdf_out, 64, kdf_in, 64, NULL, 0) != 0) {
+            sodium_memzero(dh_out, sizeof(dh_out));
+            sodium_memzero(kdf_in, sizeof(kdf_in));
+            sodium_memzero(&state, sizeof(state));
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "kdf_failed"));
+        }
+        memcpy(state.root_key, kdf_out, 32);
+        memcpy(state.send_chain_key, kdf_out + 32, 32);
+        sodium_memzero(dh_out, sizeof(dh_out));
+        sodium_memzero(kdf_in, sizeof(kdf_in));
+        sodium_memzero(kdf_out, sizeof(kdf_out));
+    } else {
+        if (self_priv.size != crypto_box_SECRETKEYBYTES) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "invalid_self_priv_size"));
+        }
+        memcpy(state.dh_send_private, self_priv.data, crypto_box_SECRETKEYBYTES);
+        crypto_scalarmult_base(state.dh_send_public, state.dh_send_private);
+        // dh_recv_public stays zero; dh_recv_initialized stays false.
+        // send_chain_key / recv_chain_key stay zero -- set on first receive.
     }
-    
-    // Initialize counters
+
+    state.initialized = true;
     state.send_message_number = 0;
     state.recv_message_number = 0;
     state.prev_send_length = 0;
-    state.initialized = true;
-    
-    // Create binary with the Double Ratchet state
+
     ERL_NIF_TERM dr_session_term;
-    unsigned char *dr_session_data = enif_make_new_binary(env, DR_STATE_SIZE, &dr_session_term);
+    unsigned char *dr_session_data =
+        enif_make_new_binary(env, DR_STATE_SIZE, &dr_session_term);
     memcpy(dr_session_data, &state, DR_STATE_SIZE);
-    
-    // Clear sensitive data from stack
     sodium_memzero(&state, sizeof(state));
-    
+
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), dr_session_term);
 }
 
@@ -1070,29 +1157,36 @@ static ERL_NIF_TERM reset_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TE
     if (argc != 2) {
         return enif_make_badarg(env);
     }
-    
+
     ErlNifBinary dr_session, plaintext;
-    
+
     if (!enif_inspect_binary(env, argv[0], &dr_session) ||
         !enif_inspect_binary(env, argv[1], &plaintext)) {
         return enif_make_badarg(env);
     }
-    
+
     // Validate session size
     if (dr_session.size != DR_STATE_SIZE) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_session_size"));
     }
-    
+
     // Copy state from binary
     double_ratchet_state_t state;
     memcpy(&state, dr_session.data, DR_STATE_SIZE);
-    
+
     if (!state.initialized) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "session_not_initialized"));
     }
-    
+
+    // Bob cannot send before receiving Alice's first message -- his
+    // send_chain_key is only derived during the receive ratchet.
+    if (!state.dh_recv_initialized) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "must_receive_first"));
+    }
+
     // Derive message key from current chain key
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     derive_message_key(message_key, state.send_chain_key);
@@ -1195,18 +1289,19 @@ static ERL_NIF_TERM set_cache_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     memcpy(&prev_chain_length, header + 32, 4);
     memcpy(&message_number, header + 36, 4);
     
-    // Check if we need to perform DH ratchet (new DH public key)
-    if (memcmp(remote_dh_public, state.dh_recv_public, crypto_box_PUBLICKEYBYTES) != 0) {
-        // Perform DH ratchet
-        if (dh_ratchet(&state, remote_dh_public) != 0) {
-            return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+    // Trigger receive ratchet if this is the first message ever, or if the
+    // peer rotated their DH key. dh_ratchet_recv derives BOTH a new
+    // recv_chain_key and a new send_chain_key (per Signal DR spec).
+    bool need_ratchet = !state.dh_recv_initialized ||
+        memcmp(remote_dh_public, state.dh_recv_public,
+               crypto_box_PUBLICKEYBYTES) != 0;
+    if (need_ratchet) {
+        if (dh_ratchet_recv(&state, remote_dh_public) != 0) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "dh_ratchet_failed"));
         }
-        
-        // Reset receiving chain
-        state.recv_message_number = 0;
     }
-    
+
     // Skip messages if necessary (simplified - assumes in-order delivery)
     while (state.recv_message_number < message_number) {
         advance_chain_key(state.recv_chain_key, state.recv_chain_key);
@@ -1267,7 +1362,7 @@ static ErlNifFunc nif_funcs[] = {
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
     {"encrypt_message", 2, encrypt_message, 0},
     {"decrypt_message", 2, decrypt_message, 0},
-    {"get_cache_stats", 3, get_cache_stats, 0},      // Double Ratchet: init_double_ratchet
+    {"get_cache_stats", 4, get_cache_stats, 0},      // Double Ratchet: init_double_ratchet
     {"reset_cache_stats", 2, reset_cache_stats, 0},  // Double Ratchet: dr_encrypt_message
     {"set_cache_size", 2, set_cache_size, 0}         // Double Ratchet: dr_decrypt_message
 };
