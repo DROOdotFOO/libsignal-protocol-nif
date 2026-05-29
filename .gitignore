@@ -43,6 +43,7 @@ coverage_test_SUITE.erl
 *.swo
 .emacs.d/
 .elixir_ls/
+.claude/
 
 # OS files
 Thumbs.db
