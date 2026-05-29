@@ -60,8 +60,8 @@ static ERL_NIF_TERM generate_curve25519_keypair(ErlNifEnv *env, int argc, const 
     // Clear sensitive data from stack
     sodium_memzero(private_key, sizeof(private_key));
     
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), 
-                           enif_make_tuple2(env, private_term, public_term));
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"),
+                           enif_make_tuple2(env, public_term, private_term));
 }
 
 static ERL_NIF_TERM generate_ed25519_keypair(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
