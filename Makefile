@@ -149,7 +149,7 @@ test: test-dirs
 
 # Run unit tests only
 test-unit: test-dirs
-	$(LIBRARY_PATH_ENV) rebar3 as unit ct
+	$(LIBRARY_PATH_ENV) rebar3 as unit ct --dir test/erl/unit
 
 # Run integration tests only
 test-integration: test-dirs
@@ -165,7 +165,7 @@ test-cover: test-dirs
 
 # Run unit tests with coverage
 test-unit-cover: test-dirs
-	$(LIBRARY_PATH_ENV) rebar3 as unit ct --cover
+	$(LIBRARY_PATH_ENV) rebar3 as unit ct --dir test/erl/unit --cover
 
 # Run integration tests with coverage
 test-integration-cover: test-dirs
