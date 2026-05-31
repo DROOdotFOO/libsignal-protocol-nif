@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Double Ratchet implementation (`init_double_ratchet/4`, `dr_encrypt_message/2`, `dr_decrypt_message/2`) backed by `dr_init/4`, `dr_encrypt/2`, `dr_decrypt/2` NIF functions.
+- MKSKIPPED cache for out-of-order DR delivery. Bounded LRU (32 slots) keyed by `(dh_pub, message_number)`; `MAX_SKIP = 32` per receive to bound DOS.
+- Test suites: `crypto_properties_SUITE`, `crypto_adversarial_SUITE`, `double_ratchet_SUITE`, `double_ratchet_reorder_SUITE`.
+
+### Changed
+
+- **Breaking**: `signal_nif:generate_curve25519_keypair/0` now returns `{ok, {Pub, Priv}}` (was `{ok, {Priv, Pub}}`).
+- **Breaking**: `libsignal_protocol_nif:init_double_ratchet/3` → `/4` — added an explicit `IsAlice` flag and split the `RemoteIdentityPub` / `SelfIdentityPriv` arguments. The prior 3-arg form never produced a working bidirectional channel.
+- **Breaking**: DR NIF binding names: `get_cache_stats` → `dr_init`, `reset_cache_stats` → `dr_encrypt`, `set_cache_size` → `dr_decrypt`. The Erlang aliases `init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message` are unchanged, so public callers are unaffected.
+- **Breaking**: DR session binary grew from ~200 B to ~2.6 KB (MKSKIPPED storage). Sessions persisted across the upgrade will fail with `invalid_session_size`.
+- `libsignal_protocol_nif:load_nif/0` now fails closed (`{error, _}` from `-on_load`) when the C NIF can't be found; previously it printed a warning and returned `ok`, leaving the module loaded with stubs.
+- macOS NIF builds now emit `.so` (was `.dylib`) to match what BEAM looks for.
+- Unit test profile no longer pinned to `signal_crypto_SUITE`; `make test-unit` runs every suite under `test/erl/unit/`.
+
+### Fixed
+
+- DR receive ratchet now derives the recv chain key before the new send chain (per Signal DR spec §3.5). Previous version only did the send-side KDF, leaving Bob unable to decrypt Alice's messages after his first reply.
+
+### Removed
+
+- `libsignal_protocol_nif_v2` NIF (623 C + 64 Erlang lines) — no callers, no tests, no documented purpose.
+- ~360 lines of unbound C functions in `libsignal_protocol_nif.c` (older DR encrypt/decrypt pair, helper that was never exported).
+- 8 dead test suites referencing non-existent modules (`nif`, `signal_crypto`, `signal_session`, `protocol`) plus the dead `test_cache_management` function in `signal_protocol_test_SUITE`.
+- Plaintext-passthrough fallback functions in `libsignal_protocol_nif.erl` and the deleted `_v2.erl`. They were never reachable (public functions already fired `nif_error`), but the dead code was a trap: any future wiring would have silently downgraded sessions to plaintext.
+
+### Security
+
+- Removed plaintext-passthrough fallback trap (see Removed above) and made `load_nif/0` fail closed — a NIF load failure now refuses to load the module rather than leaving it loaded with stubs.
+
+### CI
+
+- Bumped `aquasecurity/trivy-action` from `0.16.1` (missing) to `v0.36.0`.
+- `rebar3 format` applied to all test suites.
+- Fixed Erlang hex literal (`16#FFFFFFFF`) misused in the Elixir wrapper test (`0xFFFFFFFF`).
+
 ## [0.1.1] - 2024-07-07
 
 ### Added
