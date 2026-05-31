@@ -1,5 +1,5 @@
 name = "libsignal_protocol_gleam"
-version = "0.1.1"
+version = "0.2.0"
 description = "Type-safe Gleam wrapper for Signal Protocol cryptographic primitives with libsodium. Provides strongly-typed APIs for key generation, digital signatures, encryption, and session management."
 licences = ["Apache-2.0"]
 

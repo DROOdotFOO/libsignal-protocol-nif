@@ -1,6 +1,6 @@
 {application, libsignal_protocol_gleam, [
     {description, "Gleam wrapper for Signal Protocol cryptographic primitives"},
-    {vsn, "0.1.1"},
+    {vsn, "0.2.0"},
     {registered, []},
     {mod, {libsignal_protocol_gleam_app, []}},
     {applications, [

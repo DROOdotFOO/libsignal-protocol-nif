@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-01
+
 ### Added
 
 - Double Ratchet implementation (`init_double_ratchet/4`, `dr_encrypt_message/2`, `dr_decrypt_message/2`) backed by `dr_init/4`, `dr_encrypt/2`, `dr_decrypt/2` NIF functions.
@@ -36,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `c_src/{protocol,crypto,session,keys,cache,utils}/`, `c_src/nif.c`, `c_src/types.h`, `c_src/constants.h` — 3379 LOC of dead C never referenced by the top-level `CMakeLists.txt`.
 - **Breaking**: `SignalProtocol.start_link/1` and the GenServer at the bottom of `wrappers/elixir/lib/signal_protocol.ex`. The handle_call passthroughs added nothing over direct module calls.
 - **Breaking, security**: `SignalProtocol`'s `rescue UndefinedFunctionError -> mock` blocks. Every public function fell back to literal-plaintext mocks (e.g. `{:ok, "mock_encrypted_#{message}"}`) when the NIF wasn't loaded -- same plaintext-passthrough trap that was removed from the Erlang side, but actually reachable. Callers without the NIF now raise `UndefinedFunctionError`.
+- **Breaking**: `SignalProtocol.Session` module (`wrappers/elixir/lib/session.ex`) — pure passthrough to `SignalProtocol.*` with a now-fixed pattern bug.
+- 4 additional dead Erlang test suites surviving the earlier P1 pass: `integration_SUITE`, `signal_protocol_test_SUITE`, `smoke/debug_module_SUITE`, `smoke/simple_module_test_SUITE`. All referenced non-existent `:nif`/`signal_crypto` modules.
+- Stale duplicate test trees: `test/elixir/*.exs` (3 files) and `test/gleam/*.gleam` (4 files) — never run, drifted from `wrappers/{elixir,gleam}/test/`.
 
 ### Refactored
 
@@ -45,8 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `keys.c` + `keys.h` — generate_identity_key_pair, generate_pre_key, generate_signed_pre_key (~135 LOC)
   - `session.c` + `session.h` — create_session_*, process_pre_key_bundle, encrypt_message, decrypt_message (~400 LOC)
 - `LibsignalProtocol` (Elixir wrapper) — 113 → 36 LOC. Removed try/rescue/catch boilerplate around every NIF call; factored shared error normalization into a single private helper.
-- `signal_protocol.gleam` — replaced `case` identity wrappers and nested `case` in `create_and_process_bundle` with `result.try`/`use` syntax.
-- `SignalProtocol.Session.create_and_process_bundle/3` — pattern was `{:ok, _, _} <- process_pre_key_bundle(...)` but the NIF returns `:ok`. Fixed to `:ok <- process_pre_key_bundle(...)`.
+- `signal_protocol.gleam` — replaced `case` identity wrappers and nested `case` in `create_and_process_bundle` with `result.try`/`use` syntax. Implemented `create_bundle_binary` to serialize identity_key + signed_prekey_public + signature + pre_key_public matching the C NIF's expected layout (was a placeholder that only emitted ID ints).
+- `wrappers/elixir/test/signal_protocol_test.exs` — was 118 LOC of tests calling non-existent `start/0`, `sign_data/2`, `verify_signature/3`, `hmac_sha256/2`, `sha256/1`. Replaced with 23 LOC exercising the 5 real `SignalProtocol` functions.
+- `wrappers/elixir/test/pre_key_bundle_test.exs` — was 340 LOC of tests with a CompileError (undefined variables), 35 references to non-existent `:nif` module, and assertions for fields that don't exist on the returned bundle. Replaced with 51 LOC covering `PreKeyBundle.create/5` ↔ `parse/1` round-trip and `verify_signature/1`.
 
 ### Security
 
@@ -55,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### CI
 
 - Bumped `aquasecurity/trivy-action` from `0.16.1` (missing) to `v0.36.0`.
+- Bumped `actions/checkout` v4.1.1 → v5, `actions/cache` v4 → v5, `erlef/setup-beam` v1.18.0 → v1.24.0, `docker/setup-buildx-action` v3 → v4, `docker/login-action` v3 → v4. All clears the Node.js 20 deprecation deadline (2026-06-16).
+- Removed the codecov upload step (was failing with exit code 1 every run, masked by `continue-on-error: true`).
+- Tightened the Elixir wrapper test step in CI: no more `mix test || { ... }` swallowing failures.
 - `rebar3 format` applied to all test suites.
 - Fixed Erlang hex literal (`16#FFFFFFFF`) misused in the Elixir wrapper test (`0xFFFFFFFF`).
 
