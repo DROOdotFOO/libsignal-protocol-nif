@@ -1057,7 +1057,6 @@ static ERL_NIF_TERM decrypt_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), decrypted_term);
 }
 
-// Double Ratchet: Initialize session (replacing get_cache_stats)
 // Double Ratchet init (per Signal DR spec section 3.3).
 // Args: SharedSecret(64), RemoteIdentityPub(32), SelfIdentityPriv(32), IsAlice(int).
 // Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral). She does an
@@ -1065,7 +1064,7 @@ static ERL_NIF_TERM decrypt_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 // Bob: RemoteIdentityPub is ignored. He stores his identity keypair and waits
 //   for Alice's first message before any chain key is derived; encrypt fails
 //   until then. This mirrors the Signal spec asymmetry: initiator sends first.
-static ERL_NIF_TERM get_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+static ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 4) {
         return enif_make_badarg(env);
@@ -1151,8 +1150,8 @@ static ERL_NIF_TERM get_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), dr_session_term);
 }
 
-// Double Ratchet: Encrypt message (replacing reset_cache_stats)
-static ERL_NIF_TERM reset_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// Double Ratchet: Encrypt message.
+static ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 2) {
         return enif_make_badarg(env);
@@ -1245,8 +1244,8 @@ static ERL_NIF_TERM reset_cache_stats(ErlNifEnv *env, int argc, const ERL_NIF_TE
                            enif_make_tuple2(env, encrypted_term, updated_session_term));
 }
 
-// Double Ratchet: Decrypt message (replacing set_cache_size)
-static ERL_NIF_TERM set_cache_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// Double Ratchet: Decrypt message.
+static ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 2) {
         return enif_make_badarg(env);
@@ -1362,9 +1361,9 @@ static ErlNifFunc nif_funcs[] = {
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
     {"encrypt_message", 2, encrypt_message, 0},
     {"decrypt_message", 2, decrypt_message, 0},
-    {"get_cache_stats", 4, get_cache_stats, 0},      // Double Ratchet: init_double_ratchet
-    {"reset_cache_stats", 2, reset_cache_stats, 0},  // Double Ratchet: dr_encrypt_message
-    {"set_cache_size", 2, set_cache_size, 0}         // Double Ratchet: dr_decrypt_message
+    {"dr_init", 4, dr_init, 0},
+    {"dr_encrypt", 2, dr_encrypt, 0},
+    {"dr_decrypt", 2, dr_decrypt, 0}
 };
 
 static int on_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)

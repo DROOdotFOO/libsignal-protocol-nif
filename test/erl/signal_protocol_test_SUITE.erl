@@ -164,4 +164,3 @@ test_protocol_functions(_Config) ->
     true = is_binary(SignedPreKey),
 
     ok.
-

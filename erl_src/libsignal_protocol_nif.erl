@@ -10,9 +10,9 @@
     process_pre_key_bundle/2,
     encrypt_message/2,
     decrypt_message/2,
-    get_cache_stats/4,
-    reset_cache_stats/2,
-    set_cache_size/2,
+    dr_init/4,
+    dr_encrypt/2,
+    dr_decrypt/2,
     % Double Ratchet aliases
     init_double_ratchet/4,
     dr_encrypt_message/2,
@@ -73,28 +73,27 @@ encrypt_message(_Session, _Message) ->
 decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
-% Double Ratchet functions (implemented via cache function name reuse;
-% the C side rebinds these names to dr_init / dr_encrypt / dr_decrypt).
+% Double Ratchet functions.
 % For Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral);
 % RemoteIdentityPub is Bob's identity public key.
 % For Bob:   RemoteIdentityPub is ignored; SelfIdentityPriv is his identity
 % private key. Bob's encrypt fails until he receives Alice's first message.
-get_cache_stats(_SharedSecret, _RemoteIdentityPub, _SelfIdentityPriv, _IsAlice) ->
+dr_init(_SharedSecret, _RemoteIdentityPub, _SelfIdentityPriv, _IsAlice) ->
     erlang:nif_error(nif_not_loaded).
 
-reset_cache_stats(_DrSession, _Message) ->
+dr_encrypt(_DrSession, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
-set_cache_size(_DrSession, _EncryptedMessage) ->
+dr_decrypt(_DrSession, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet aliases for better API
 init_double_ratchet(SharedSecret, RemoteIdentityPub, SelfIdentityPriv, IsAlice) ->
-    get_cache_stats(SharedSecret, RemoteIdentityPub, SelfIdentityPriv, IsAlice).
+    dr_init(SharedSecret, RemoteIdentityPub, SelfIdentityPriv, IsAlice).
 
 dr_encrypt_message(DrSession, Message) ->
-    reset_cache_stats(DrSession, Message).
+    dr_encrypt(DrSession, Message).
 
 dr_decrypt_message(DrSession, EncryptedMessage) ->
-    set_cache_size(DrSession, EncryptedMessage).
+    dr_decrypt(DrSession, EncryptedMessage).
 
