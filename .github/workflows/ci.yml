@@ -172,30 +172,12 @@ jobs:
       if: matrix.wrapper == 'elixir'
       run: |
         cd wrappers/elixir
-        # Copy NIF files to wrapper priv directory
         mkdir -p priv
-        cp -f ../../priv/*.so priv/ 2>/dev/null || cp -f ../../priv/*.dylib priv/ 2>/dev/null || cp -f ../../priv/*.dll priv/ 2>/dev/null || echo "No NIF files found to copy"
-        ls -la priv/
-        echo "Installing dependencies..."
+        cp -f ../../priv/*.so priv/
         mix deps.get
-        echo "Compiling..."
         mix compile
-        echo "Running tests with Erlang NIF module in code path..."
-        # Add the main project's beam files to the code path
         export ERL_LIBS="../../_build/default/lib:$ERL_LIBS"
-        # Also add the main project's ebin directory to the code path
-        export ERL_LIBS="../../ebin:$ERL_LIBS"
-        # Set MIX_ENV to test
-        export MIX_ENV=test
-        # Run tests with verbose output and allow some failures for NIF loading issues
-        mix test --trace --max-failures 5 || {
-          echo "Tests failed, checking for NIF loading issues..."
-          echo "Available NIF files:"
-          find ../../ -name "*.so" -o -name "*.dylib" -o -name "*.dll" | head -10
-          echo "ERL_LIBS path: $ERL_LIBS"
-          echo "Re-running tests with more verbose output..."
-          mix test --trace --max-failures 1 || echo "Tests failed but continuing CI"
-        }
+        mix test --trace
     
 
 
