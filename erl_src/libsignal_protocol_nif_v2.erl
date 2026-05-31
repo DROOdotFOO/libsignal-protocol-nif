@@ -13,26 +13,13 @@
 
 -on_load(load_nif/0).
 
-% Suppress Dialyzer warnings for intentionally unused fallback functions
--dialyzer({nowarn_function, [
-    init_fallback/0,
-    generate_identity_key_pair_fallback/0,
-    generate_pre_key_fallback/1,
-    generate_signed_pre_key_fallback/2,
-    process_pre_key_bundle_fallback/2,
-    init_double_ratchet_fallback/3,
-    dr_encrypt_message_fallback/2,
-    dr_decrypt_message_fallback/2
-]}).
-
 %% NIF loading functions
 load_nif() ->
     Paths = ["../priv/libsignal_protocol_nif_v2", "priv/libsignal_protocol_nif_v2", "./priv/libsignal_protocol_nif_v2"],
     load_nif_from_paths(Paths).
 
 load_nif_from_paths([]) ->
-    io:format("Warning: libsignal_protocol_nif_v2 C NIF not found, using Erlang fallback~n"),
-    ok;
+    {error, "Could not load libsignal_protocol_nif_v2 from any path"};
 load_nif_from_paths([Path | Rest]) ->
     case erlang:load_nif(Path, 0) of
         ok ->
@@ -46,8 +33,10 @@ load_nif_from_paths([Path | Rest]) ->
             load_nif_from_paths(Rest)
     end.
 
-%% NIF function stubs (will be replaced by C implementations when NIF loads)
-%% These serve as fallbacks if the C NIF fails to load
+%% NIF function stubs (replaced by C implementations when NIF loads).
+%% If load_nif/0 fails, the module itself fails to load (see -on_load).
+%% These bodies only fire if a caller reaches them through a dev hot-reload
+%% without the NIF attached -- never in a production load path.
 
 init() ->
     erlang:nif_error(nif_not_loaded).
@@ -73,54 +62,3 @@ dr_encrypt_message(_DrSession, _Message) ->
 dr_decrypt_message(_DrSession, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
-%% Erlang fallback implementations (used only if C NIF fails to load)
-
-init_fallback() ->
-    ok.
-
-generate_identity_key_pair_fallback() ->
-    PublicKey = crypto:strong_rand_bytes(32),
-    PrivateKey = crypto:strong_rand_bytes(32),
-    {ok, {PublicKey, PrivateKey}}.
-
-generate_pre_key_fallback(KeyId) when is_integer(KeyId) ->
-    PreKey = crypto:strong_rand_bytes(32),
-    {ok, {KeyId, PreKey}}.
-
-generate_signed_pre_key_fallback(IdentityKey, KeyId) when is_binary(IdentityKey), is_integer(KeyId) ->
-    PreKey = crypto:strong_rand_bytes(32),
-    Signature = crypto:strong_rand_bytes(64),
-    {ok, {KeyId, PreKey, Signature}}.
-
-process_pre_key_bundle_fallback(LocalIdentityKey, Bundle) when is_binary(LocalIdentityKey), is_binary(Bundle) ->
-    % Fallback X3DH implementation - returns dummy session key and ephemeral key
-    SessionKey = crypto:strong_rand_bytes(64),
-    EphemeralKey = crypto:strong_rand_bytes(32),
-    {ok, {SessionKey, EphemeralKey}}.
-
-init_double_ratchet_fallback(SharedSecret, RemotePublicKey, IsAlice) 
-    when is_binary(SharedSecret), is_binary(RemotePublicKey), is_integer(IsAlice) ->
-    % Fallback Double Ratchet initialization - returns dummy session
-    DrSession = crypto:strong_rand_bytes(200),
-    {ok, DrSession}.
-
-dr_encrypt_message_fallback(DrSession, Message) when is_binary(DrSession), is_binary(Message) ->
-    % Fallback encryption - simple padding
-    Header = <<170,170,170,170,170,170,170,170>>, % 8 bytes of 0xAA
-    Footer = <<187,187,187,187,187,187,187,187>>, % 8 bytes of 0xBB
-    Encrypted = <<Header/binary, Message/binary, Footer/binary>>,
-    UpdatedSession = crypto:strong_rand_bytes(200),
-    {ok, {Encrypted, UpdatedSession}}.
-
-dr_decrypt_message_fallback(DrSession, EncryptedMessage) when is_binary(DrSession), is_binary(EncryptedMessage) ->
-    % Fallback decryption - remove padding
-    case byte_size(EncryptedMessage) of
-        Size when Size >= 16 ->
-            <<_Header:8/binary, Rest/binary>> = EncryptedMessage,
-            MessageSize = Size - 16,
-            <<Message:MessageSize/binary, _Footer:8/binary>> = Rest,
-            UpdatedSession = crypto:strong_rand_bytes(200),
-            {ok, {Message, UpdatedSession}};
-        _ ->
-            {error, invalid_message}
-    end. 
