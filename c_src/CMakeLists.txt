@@ -44,24 +44,18 @@ add_library(libsignal_protocol_nif SHARED
     libsignal_protocol_nif.c
 )
 
-# Add the new v2 libsignal_protocol_nif_v2 library with clean function table
-add_library(libsignal_protocol_nif_v2 SHARED
-    libsignal_protocol_nif_v2.c
-)
-
 # Link libsodium to all libraries
 target_link_libraries(signal_nif ${SODIUM_LIBRARIES})
 target_link_libraries(libsignal_protocol_nif ${SODIUM_LIBRARIES})
-target_link_libraries(libsignal_protocol_nif_v2 ${SODIUM_LIBRARIES})
 
 # Remove explicit erl_nif linking; use dynamic lookup on macOS
 if(APPLE)
-    foreach(target signal_nif libsignal_protocol_nif libsignal_protocol_nif_v2)
+    foreach(target signal_nif libsignal_protocol_nif)
         target_link_libraries(${target} ${SODIUM_LIBRARIES})
         target_link_options(${target} PRIVATE "-undefined" "dynamic_lookup")
     endforeach()
 else()
-    foreach(target signal_nif libsignal_protocol_nif libsignal_protocol_nif_v2)
+    foreach(target signal_nif libsignal_protocol_nif)
         target_link_libraries(${target} ${SODIUM_LIBRARIES})
     endforeach()
 endif()
@@ -80,13 +74,6 @@ set_target_properties(libsignal_protocol_nif PROPERTIES
     PREFIX ""  # Remove the "lib" prefix
 )
 
-# Set output directory and name for libsignal_protocol_nif_v2
-set_target_properties(libsignal_protocol_nif_v2 PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../priv"
-    OUTPUT_NAME "libsignal_protocol_nif_v2"
-    PREFIX ""  # Remove the "lib" prefix
-)
-
 # Set compile flags based on platform.
 # Note: BEAM expects .so for NIFs on macOS too, so APPLE is intentionally
 # folded into the UNIX branch — do not split out a .dylib case.
@@ -97,9 +84,6 @@ if(UNIX)
     set_target_properties(libsignal_protocol_nif PROPERTIES
         SUFFIX ".so"
     )
-    set_target_properties(libsignal_protocol_nif_v2 PROPERTIES
-        SUFFIX ".so"
-    )
 elseif(WIN32)
     set_target_properties(signal_nif PROPERTIES
         SUFFIX ".dll"
@@ -107,7 +91,4 @@ elseif(WIN32)
     set_target_properties(libsignal_protocol_nif PROPERTIES
         SUFFIX ".dll"
     )
-    set_target_properties(libsignal_protocol_nif_v2 PROPERTIES
-        SUFFIX ".dll"
-    )
-endif() 
+endif()
