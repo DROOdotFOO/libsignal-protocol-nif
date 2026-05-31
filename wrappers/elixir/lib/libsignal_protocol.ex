@@ -1,112 +1,39 @@
 defmodule LibsignalProtocol do
   @moduledoc """
-  Elixir wrapper for the Signal Protocol library.
-  Provides a clean, idiomatic interface for secure messaging.
+  Elixir wrapper for the Signal Protocol NIF.
+
+  Normalizes NIF error terms to strings; otherwise returns NIF results
+  unchanged. A missing NIF raises `UndefinedFunctionError` at the call
+  site -- callers must ensure the NIF is built and on the load path.
   """
 
-  # Suppress warnings for undefined NIF functions during development
-  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :init, 0}}
-  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :create_session, 1}}
-  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :create_session, 2}}
-  @compile {:no_warn_undefined, {:libsignal_protocol_nif, :generate_identity_key_pair, 0}}
+  @nif :libsignal_protocol_nif
 
-  # No @on_load - we'll use the existing Erlang NIF module directly
-
-  @doc """
-  Initializes the Signal Protocol library.
-  Returns `:ok` on success or `{:error, reason}` on failure.
-  """
   @spec init() :: :ok | {:error, String.t()}
   def init do
-    try do
-      # Ensure the NIF module is loaded first
-      :code.ensure_loaded(:libsignal_protocol_nif)
-
-      case :libsignal_protocol_nif.init() do
-        :ok -> :ok
-        {:error, reason} when is_atom(reason) -> {:error, Atom.to_string(reason)}
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
-    rescue
-      UndefinedFunctionError ->
-        {:error, "NIF not loaded - libsignal_protocol_nif.init/0 not found"}
-    catch
-      :error, :undef ->
-        {:error, "NIF not loaded - function undefined"}
-    end
+    :code.ensure_loaded(@nif)
+    @nif.init() |> normalize()
   end
 
-  @doc """
-  Creates a new session for a recipient using a public key.
-  Returns `{:ok, session}` on success or `{:error, reason}` on failure.
-  """
   @spec create_session(binary()) :: {:ok, binary()} | {:error, String.t()}
   def create_session(public_key) when is_binary(public_key) do
-    try do
-      case :libsignal_protocol_nif.create_session(public_key) do
-        {:ok, session} -> {:ok, session}
-        {:error, reason} when is_atom(reason) -> {:error, Atom.to_string(reason)}
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
-    rescue
-      UndefinedFunctionError ->
-        {:error, "NIF function create_session/1 not found"}
-    catch
-      :error, :undef ->
-        {:error, "NIF function create_session/1 undefined"}
-    end
+    @nif.create_session(public_key) |> normalize()
   end
 
-  @doc """
-  Creates a new session using local private key and remote public key.
-  Returns `{:ok, session}` on success or `{:error, reason}` on failure.
-  """
   @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, String.t()}
   def create_session(local_private_key, remote_public_key)
       when is_binary(local_private_key) and is_binary(remote_public_key) do
-    try do
-      case :libsignal_protocol_nif.create_session(local_private_key, remote_public_key) do
-        {:ok, session} -> {:ok, session}
-        {:error, reason} when is_atom(reason) -> {:error, Atom.to_string(reason)}
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
-    rescue
-      UndefinedFunctionError ->
-        {:error, "NIF function create_session/2 not found"}
-    catch
-      :error, :undef ->
-        {:error, "NIF function create_session/2 undefined"}
-    end
+    @nif.create_session(local_private_key, remote_public_key) |> normalize()
   end
 
-  @doc """
-  Generates a new identity key pair.
-  Returns `{:ok, {public_key, signature}}` on success.
-  """
   @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, String.t()}
   def generate_identity_key_pair do
-    try do
-      case :libsignal_protocol_nif.generate_identity_key_pair() do
-        {:ok, {public_key, signature}} -> {:ok, {public_key, signature}}
-        {:error, reason} when is_atom(reason) -> {:error, Atom.to_string(reason)}
-        {:error, reason} when is_binary(reason) -> {:error, reason}
-        {:error, reason} -> {:error, inspect(reason)}
-      end
-    rescue
-      UndefinedFunctionError ->
-        {:error, "NIF function generate_identity_key_pair/0 not found"}
-    catch
-      :error, :undef ->
-        {:error, "NIF function generate_identity_key_pair/0 undefined"}
-    end
+    @nif.generate_identity_key_pair() |> normalize()
   end
 
-  # Simplified API - only include the functions that are most likely to work
-  # Other functions can be added once basic functionality is confirmed
-
-  # NIF stubs - these will be replaced by the actual NIF functions
-  def load_nif_stub, do: :erlang.nif_error(:nif_not_loaded)
+  defp normalize(:ok), do: :ok
+  defp normalize({:ok, _} = ok), do: ok
+  defp normalize({:error, reason}) when is_binary(reason), do: {:error, reason}
+  defp normalize({:error, reason}) when is_atom(reason), do: {:error, Atom.to_string(reason)}
+  defp normalize({:error, reason}), do: {:error, inspect(reason)}
 end

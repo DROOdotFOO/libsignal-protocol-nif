@@ -1,4 +1,5 @@
 import gleam/int
+import gleam/result
 
 /// Represents a Signal Protocol session.
 pub type Session {
@@ -130,12 +131,7 @@ pub fn process_pre_key_bundle(
   bundle: PreKeyBundle,
 ) -> Result(Nil, String) {
   let bundle_binary = create_bundle_binary(bundle)
-  case
-    call_nif_process_pre_key_bundle(session_reference(session), bundle_binary)
-  {
-    Ok(Nil) -> Ok(Nil)
-    Error(reason) -> Error(reason)
-  }
+  call_nif_process_pre_key_bundle(session_reference(session), bundle_binary)
 }
 
 /// Encrypts a message using the given session.
@@ -160,16 +156,12 @@ pub fn create_and_process_bundle(
   remote_identity_key: BitArray,
   bundle: PreKeyBundle,
 ) -> Result(Session, String) {
-  let session = create_session_with_keys(local_identity_key, remote_identity_key)
-  case session {
-    Ok(session) -> {
-      case process_pre_key_bundle(session, bundle) {
-        Ok(Nil) -> Ok(session)
-        Error(e) -> Error(e)
-      }
-    }
-    Error(e) -> Error(e)
-  }
+  use session <- result.try(create_session_with_keys(
+    local_identity_key,
+    remote_identity_key,
+  ))
+  use _ <- result.try(process_pre_key_bundle(session, bundle))
+  Ok(session)
 }
 
 /// Sends a message through a session, handling encryption.
