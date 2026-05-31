@@ -72,10 +72,10 @@ defmodule LibsignalProtocol.PreKeyBundleTest do
       assert bundle.device_id == 0
 
       # Test with large values
-      large_bundle = PreKeyBundle.create(16#FFFFFFFF, 16#FFFFFFFF, {pre_key_id, pre_key_public},
+      large_bundle = PreKeyBundle.create(0xFFFFFFFF, 0xFFFFFFFF, {pre_key_id, pre_key_public},
                                         {signed_pre_key_id, signed_pre_key_public, signature}, identity_key)
-      assert large_bundle.registration_id == 16#FFFFFFFF
-      assert large_bundle.device_id == 16#FFFFFFFF
+      assert large_bundle.registration_id == 0xFFFFFFFF
+      assert large_bundle.device_id == 0xFFFFFFFF
     end
   end
 
@@ -321,18 +321,18 @@ defmodule LibsignalProtocol.PreKeyBundleTest do
         :nif.generate_signed_pre_key(identity_key, 67890)
 
       # Test with large registration and device IDs
-      bundle = PreKeyBundle.create(16#FFFFFFFF, 16#FFFFFFFF, {pre_key_id, pre_key_public},
+      bundle = PreKeyBundle.create(0xFFFFFFFF, 0xFFFFFFFF, {pre_key_id, pre_key_public},
                                   {signed_pre_key_id, signed_pre_key_public, signature}, identity_key)
 
-      assert bundle.registration_id == 16#FFFFFFFF
-      assert bundle.device_id == 16#FFFFFFFF
+      assert bundle.registration_id == 0xFFFFFFFF
+      assert bundle.device_id == 0xFFFFFFFF
 
       # Test parse with large binary
       bundle_binary = :erlang.term_to_binary(bundle)
       case PreKeyBundle.parse(bundle_binary) do
         {:ok, parsed_bundle} ->
-          assert parsed_bundle.registration_id == 16#FFFFFFFF
-          assert parsed_bundle.device_id == 16#FFFFFFFF
+          assert parsed_bundle.registration_id == 0xFFFFFFFF
+          assert parsed_bundle.device_id == 0xFFFFFFFF
         {:error, _} -> :ok
       end
     end
