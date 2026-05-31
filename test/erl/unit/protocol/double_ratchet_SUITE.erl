@@ -12,43 +12,38 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
--export([
-    alice_to_bob_first_message_roundtrips/1,
-    alice_to_bob_sequential_roundtrip/1,
-    bob_cannot_send_before_receiving/1,
-    bob_responds_after_alice_initiates/1,
-    bidirectional_handshake/1,
-    multi_turn_conversation/1,
-    ciphertext_tamper_rejected/1,
-    replay_rejected/1
-]).
+-export([alice_to_bob_first_message_roundtrips/1, alice_to_bob_sequential_roundtrip/1,
+         bob_cannot_send_before_receiving/1, bob_responds_after_alice_initiates/1,
+         bidirectional_handshake/1, multi_turn_conversation/1, ciphertext_tamper_rejected/1,
+         replay_rejected/1]).
 
 all() ->
-    [
-        alice_to_bob_first_message_roundtrips,
-        alice_to_bob_sequential_roundtrip,
-        bob_cannot_send_before_receiving,
-        bob_responds_after_alice_initiates,
-        bidirectional_handshake,
-        multi_turn_conversation,
-        ciphertext_tamper_rejected,
-        replay_rejected
-    ].
+    [alice_to_bob_first_message_roundtrips,
+     alice_to_bob_sequential_roundtrip,
+     bob_cannot_send_before_receiving,
+     bob_responds_after_alice_initiates,
+     bidirectional_handshake,
+     multi_turn_conversation,
+     ciphertext_tamper_rejected,
+     replay_rejected].
 
 init_per_suite(Config) ->
     rand:seed(exsss, {19, 23, 29}),
     case signal_nif:test_crypto() of
-        crypto_ok -> Config;
-        Other -> {skip, {nif_init_failed, Other}}
+        crypto_ok ->
+            Config;
+        Other ->
+            {skip, {nif_init_failed, Other}}
     end.
 
-end_per_suite(_Config) -> ok.
+end_per_suite(_Config) ->
+    ok.
 
 init_per_testcase(_Name, Config) ->
     {ok, {BobPub, BobPriv}} = signal_nif:generate_curve25519_keypair(),
     SS = rand:bytes(64),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, <<>>, 1),
-    {ok, Bob}   = libsignal_protocol_nif:init_double_ratchet(SS, <<>>, BobPriv, 0),
+    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, <<>>, BobPriv, 0),
     [{alice, Alice}, {bob, Bob} | Config].
 
 %% ============================================================================
@@ -65,15 +60,14 @@ alice_to_bob_first_message_roundtrips(Config) ->
 alice_to_bob_sequential_roundtrip(Config) ->
     {Alice0, Bob0} = parties(Config),
     Msgs = [rand:bytes(N) || N <- [1, 16, 256, 1024]],
-    {_, _, Decrypted} = lists:foldl(
-        fun(M, {Asend, Brecv, Acc}) ->
-            {ok, {CT, Anext}} = libsignal_protocol_nif:dr_encrypt_message(Asend, M),
-            {ok, {PT, Bnext}} = libsignal_protocol_nif:dr_decrypt_message(Brecv, CT),
-            {Anext, Bnext, [PT | Acc]}
-        end,
-        {Alice0, Bob0, []},
-        Msgs
-    ),
+    {_, _, Decrypted} =
+        lists:foldl(fun(M, {Asend, Brecv, Acc}) ->
+                       {ok, {CT, Anext}} = libsignal_protocol_nif:dr_encrypt_message(Asend, M),
+                       {ok, {PT, Bnext}} = libsignal_protocol_nif:dr_decrypt_message(Brecv, CT),
+                       {Anext, Bnext, [PT | Acc]}
+                    end,
+                    {Alice0, Bob0, []},
+                    Msgs),
     ?assertEqual(Msgs, lists:reverse(Decrypted)).
 
 %% ============================================================================
