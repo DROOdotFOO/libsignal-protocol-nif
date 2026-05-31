@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ~360 lines of unbound C functions in `libsignal_protocol_nif.c` (older DR encrypt/decrypt pair, helper that was never exported).
 - 8 dead test suites referencing non-existent modules (`nif`, `signal_crypto`, `signal_session`, `protocol`) plus the dead `test_cache_management` function in `signal_protocol_test_SUITE`.
 - Plaintext-passthrough fallback functions in `libsignal_protocol_nif.erl` and the deleted `_v2.erl`. They were never reachable (public functions already fired `nif_error`), but the dead code was a trap: any future wiring would have silently downgraded sessions to plaintext.
+- `c_src/{protocol,crypto,session,keys,cache,utils}/`, `c_src/nif.c`, `c_src/types.h`, `c_src/constants.h` — 3379 LOC of dead C never referenced by the top-level `CMakeLists.txt`.
+- **Breaking**: `SignalProtocol.start_link/1` and the GenServer at the bottom of `wrappers/elixir/lib/signal_protocol.ex`. The handle_call passthroughs added nothing over direct module calls.
+- **Breaking, security**: `SignalProtocol`'s `rescue UndefinedFunctionError -> mock` blocks. Every public function fell back to literal-plaintext mocks (e.g. `{:ok, "mock_encrypted_#{message}"}`) when the NIF wasn't loaded -- same plaintext-passthrough trap that was removed from the Erlang side, but actually reachable. Callers without the NIF now raise `UndefinedFunctionError`.
+
+### Refactored
+
+- `c_src/libsignal_protocol_nif.c` (1148 LOC) split into:
+  - `libsignal_protocol_nif.c` — module entry (init_nif, dispatch table, on_load) (40 LOC)
+  - `dr.c` + `dr.h` — Double Ratchet state, helpers, MKSKIPPED, dr_init/encrypt/decrypt (~610 LOC)
+  - `keys.c` + `keys.h` — generate_identity_key_pair, generate_pre_key, generate_signed_pre_key (~135 LOC)
+  - `session.c` + `session.h` — create_session_*, process_pre_key_bundle, encrypt_message, decrypt_message (~400 LOC)
+- `LibsignalProtocol` (Elixir wrapper) — 113 → 36 LOC. Removed try/rescue/catch boilerplate around every NIF call; factored shared error normalization into a single private helper.
+- `signal_protocol.gleam` — replaced `case` identity wrappers and nested `case` in `create_and_process_bundle` with `result.try`/`use` syntax.
+- `SignalProtocol.Session.create_and_process_bundle/3` — pattern was `{:ok, _, _} <- process_pre_key_bundle(...)` but the NIF returns `:ok`. Fixed to `:ok <- process_pre_key_bundle(...)`.
 
 ### Security
 
