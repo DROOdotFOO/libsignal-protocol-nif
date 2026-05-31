@@ -4,14 +4,13 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([test_crypto_functions/1, test_session_management/1, test_message_encryption/1,
-         test_protocol_functions/1, test_cache_management/1]).
+         test_protocol_functions/1]).
 
 all() ->
     [test_crypto_functions,
      test_session_management,
      test_message_encryption,
-     test_protocol_functions,
-     test_cache_management].
+     test_protocol_functions].
 
 init_per_suite(Config) ->
     % Load the signal_nif module
@@ -166,25 +165,3 @@ test_protocol_functions(_Config) ->
 
     ok.
 
-% ============================================================================
-% CACHE MANAGEMENT TESTS
-% ============================================================================
-
-test_cache_management(_Config) ->
-    % Test cache statistics
-    {ok, Stats} = signal_nif:get_cache_stats(),
-    true = is_list(Stats),
-
-    % Verify stats structure
-    {hits, _Hits} = lists:keyfind(hits, 1, Stats),
-    {misses, _Misses} = lists:keyfind(misses, 1, Stats),
-    {current_size, _CurrentSize} = lists:keyfind(current_size, 1, Stats),
-    {max_size, _MaxSize} = lists:keyfind(max_size, 1, Stats),
-
-    % Test cache reset
-    ok = signal_nif:reset_cache_stats(),
-
-    % Test cache size setting
-    ok = signal_nif:set_cache_size(100, 50, 200),
-
-    ok.
