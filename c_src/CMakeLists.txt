@@ -42,6 +42,9 @@ add_library(signal_nif SHARED
 # Add the libsignal_protocol_nif library
 add_library(libsignal_protocol_nif SHARED
     libsignal_protocol_nif.c
+    dr.c
+    keys.c
+    session.c
 )
 
 # Link libsodium to all libraries
