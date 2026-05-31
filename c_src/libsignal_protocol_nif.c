@@ -1,28 +1,50 @@
 #include <erl_nif.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <time.h>
 #include <stdbool.h>
 #include <sodium.h>
+
+// Constants for Double Ratchet
+#define DR_ROOT_KEY_SIZE 32
+#define DR_CHAIN_KEY_SIZE 32
+#define DR_MESSAGE_KEY_SIZE 32
+#define DR_HEADER_KEY_SIZE 32
+
+// MKSKIPPED bounds. MAX_SKIP gates DOS (an attacker sending message_number=N
+// would force N KDF rounds before erroring); MAX_SKIPPED_KEYS bounds memory.
+// Aligned so we don't derive keys we'd immediately discard.
+#define MAX_SKIPPED_KEYS 32
+#define MAX_SKIP 32
+
+// Skipped message-key cache entry. Indexed by (dh_pub, message_number).
+typedef struct {
+    unsigned char dh_pub[32];
+    unsigned int message_number;
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+    unsigned int lru_counter;  // higher = more recent; 0 == unoccupied sentinel
+    bool occupied;
+} skipped_key_t;
 
 // Double Ratchet state structure
 typedef struct {
     // Root chain key (32 bytes)
     unsigned char root_key[32];
-    
+
     // Sending chain
     unsigned char send_chain_key[32];
     unsigned int send_message_number;
-    
+
     // Receiving chain
     unsigned char recv_chain_key[32];
     unsigned int recv_message_number;
-    
+
     // DH ratchet keys
     unsigned char dh_send_private[crypto_box_SECRETKEYBYTES];
     unsigned char dh_send_public[crypto_box_PUBLICKEYBYTES];
     unsigned char dh_recv_public[crypto_box_PUBLICKEYBYTES];
-    
+
     // Previous sending chain length (for header)
     unsigned int prev_send_length;
 
@@ -32,13 +54,15 @@ typedef struct {
     // True once dh_recv_public is a real peer key. Bob starts false until
     // Alice's first message arrives and triggers the receive ratchet.
     bool dh_recv_initialized;
+
+    // MKSKIPPED: keys derived for messages whose receive was bypassed by
+    // out-of-order delivery. Filled by skip_message_keys, drained by
+    // mkskipped_pop. LRU clock is monotonic; on full insert, slot with the
+    // lowest counter is evicted.
+    skipped_key_t mkskipped[MAX_SKIPPED_KEYS];
+    unsigned int mkskipped_lru_clock;
 } double_ratchet_state_t;
 
-// Constants for Double Ratchet
-#define DR_ROOT_KEY_SIZE 32
-#define DR_CHAIN_KEY_SIZE 32
-#define DR_MESSAGE_KEY_SIZE 32
-#define DR_HEADER_KEY_SIZE 32
 #define DR_STATE_SIZE sizeof(double_ratchet_state_t)
 
 // HKDF-like key derivation using BLAKE2b
@@ -67,6 +91,97 @@ static void derive_message_key(unsigned char *message_key, const unsigned char *
     // Use HMAC with constant 0x02 to derive message key
     unsigned char constant = 0x02;
     crypto_auth(message_key, &constant, 1, chain_key);
+}
+
+// Find MKSKIPPED slot matching (dh_pub, message_number). Returns slot index
+// or -1 if not present.
+static int mkskipped_find(const double_ratchet_state_t *state,
+                          const unsigned char *dh_pub,
+                          unsigned int message_number) {
+    for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
+        const skipped_key_t *slot = &state->mkskipped[i];
+        if (slot->occupied &&
+            slot->message_number == message_number &&
+            memcmp(slot->dh_pub, dh_pub, 32) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Insert a (dh_pub, message_number, message_key) entry. If full, evict the
+// least-recently-inserted slot (lowest lru_counter among occupied).
+static void mkskipped_insert(double_ratchet_state_t *state,
+                             const unsigned char *dh_pub,
+                             unsigned int message_number,
+                             const unsigned char *message_key) {
+    int target = -1;
+    for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
+        if (!state->mkskipped[i].occupied) {
+            target = i;
+            break;
+        }
+    }
+    if (target < 0) {
+        unsigned int oldest = UINT_MAX;
+        target = 0;
+        for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
+            if (state->mkskipped[i].lru_counter < oldest) {
+                oldest = state->mkskipped[i].lru_counter;
+                target = i;
+            }
+        }
+        sodium_memzero(state->mkskipped[target].message_key, DR_MESSAGE_KEY_SIZE);
+    }
+
+    skipped_key_t *slot = &state->mkskipped[target];
+    memcpy(slot->dh_pub, dh_pub, 32);
+    slot->message_number = message_number;
+    memcpy(slot->message_key, message_key, DR_MESSAGE_KEY_SIZE);
+    state->mkskipped_lru_clock++;
+    slot->lru_counter = state->mkskipped_lru_clock;
+    slot->occupied = true;
+}
+
+// Copy out the message key and free the slot.
+static void mkskipped_pop(double_ratchet_state_t *state, int index,
+                          unsigned char *out_message_key) {
+    skipped_key_t *slot = &state->mkskipped[index];
+    memcpy(out_message_key, slot->message_key, DR_MESSAGE_KEY_SIZE);
+    sodium_memzero(slot->message_key, DR_MESSAGE_KEY_SIZE);
+    slot->occupied = false;
+    slot->message_number = 0;
+    memset(slot->dh_pub, 0, 32);
+}
+
+// Skip and store keys in the current recv chain up to `until` (exclusive).
+// state->recv_chain_key advances as keys are derived; state->recv_message_number
+// is bumped to `until`. Returns 0 on success, -1 if the skip exceeds MAX_SKIP.
+// No-op when the recv chain hasn't been established yet (Alice pre-receive).
+static int skip_message_keys(double_ratchet_state_t *state,
+                             const unsigned char *dh_pub,
+                             unsigned int until) {
+    if (until <= state->recv_message_number) {
+        return 0;
+    }
+    if (until - state->recv_message_number > MAX_SKIP) {
+        return -1;
+    }
+    if (!state->dh_recv_initialized) {
+        // No recv chain to derive from; treat as no-op. The DH ratchet that
+        // follows will establish the chain at message number 0.
+        state->recv_message_number = until;
+        return 0;
+    }
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+    while (state->recv_message_number < until) {
+        derive_message_key(message_key, state->recv_chain_key);
+        advance_chain_key(state->recv_chain_key, state->recv_chain_key);
+        mkskipped_insert(state, dh_pub, state->recv_message_number, message_key);
+        state->recv_message_number++;
+    }
+    sodium_memzero(message_key, sizeof(message_key));
+    return 0;
 }
 
 // Perform DH ratchet step
@@ -1284,46 +1399,58 @@ static ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     unsigned char *remote_dh_public = header;
     unsigned int prev_chain_length;
     unsigned int message_number;
-    
+
     memcpy(&prev_chain_length, header + 32, 4);
     memcpy(&message_number, header + 36, 4);
-    
-    // Trigger receive ratchet if this is the first message ever, or if the
-    // peer rotated their DH key. dh_ratchet_recv derives BOTH a new
-    // recv_chain_key and a new send_chain_key (per Signal DR spec).
-    bool need_ratchet = !state.dh_recv_initialized ||
-        memcmp(remote_dh_public, state.dh_recv_public,
-               crypto_box_PUBLICKEYBYTES) != 0;
-    if (need_ratchet) {
-        if (dh_ratchet_recv(&state, remote_dh_public) != 0) {
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "dh_ratchet_failed"));
-        }
-    }
 
-    // Skip messages if necessary (simplified - assumes in-order delivery)
-    while (state.recv_message_number < message_number) {
-        advance_chain_key(state.recv_chain_key, state.recv_chain_key);
-        state.recv_message_number++;
-    }
-    
-    // Derive message key for decryption
-    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
-    derive_message_key(message_key, state.recv_chain_key);
-    
-    // Advance receiving chain
-    advance_chain_key(state.recv_chain_key, state.recv_chain_key);
-    state.recv_message_number++;
-    
     // Extract nonce and ciphertext
     unsigned char *nonce = ciphertext.data + 40;
     unsigned char *encrypted_payload = ciphertext.data + 52;
     size_t encrypted_payload_len = ciphertext.size - 52;
     size_t plaintext_len = encrypted_payload_len - crypto_aead_chacha20poly1305_ietf_ABYTES;
-    
+
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+
+    // Late delivery: if this (dh_pub, message_number) is in MKSKIPPED, use
+    // the cached key. State doesn't advance.
+    int skipped_idx = mkskipped_find(&state, remote_dh_public, message_number);
+    if (skipped_idx >= 0) {
+        mkskipped_pop(&state, skipped_idx, message_key);
+    } else {
+        // Trigger receive ratchet if this is the first message ever, or if
+        // the peer rotated their DH key. Before ratcheting, store the
+        // remaining keys from the OLD recv chain (up to prev_chain_length)
+        // so late messages on that chain can still be decrypted.
+        bool need_ratchet = !state.dh_recv_initialized ||
+            memcmp(remote_dh_public, state.dh_recv_public,
+                   crypto_box_PUBLICKEYBYTES) != 0;
+        if (need_ratchet) {
+            if (skip_message_keys(&state, state.dh_recv_public,
+                                  prev_chain_length) != 0) {
+                return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "too_many_skipped"));
+            }
+            if (dh_ratchet_recv(&state, remote_dh_public) != 0) {
+                return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "dh_ratchet_failed"));
+            }
+        }
+
+        // Skip and store keys in the (now-current) chain up to message_number.
+        if (skip_message_keys(&state, state.dh_recv_public,
+                              message_number) != 0) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "too_many_skipped"));
+        }
+
+        derive_message_key(message_key, state.recv_chain_key);
+        advance_chain_key(state.recv_chain_key, state.recv_chain_key);
+        state.recv_message_number++;
+    }
+
     ERL_NIF_TERM decrypted_term;
     unsigned char *decrypted_data = enif_make_new_binary(env, plaintext_len, &decrypted_term);
-    
+
     // Decrypt message
     unsigned long long actual_plaintext_len;
     if (crypto_aead_chacha20poly1305_ietf_decrypt(
@@ -1333,7 +1460,7 @@ static ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
             header, 40,  // Use header as additional authenticated data
             nonce, message_key) != 0) {
         sodium_memzero(message_key, sizeof(message_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "decryption_failed"));
     }
     
