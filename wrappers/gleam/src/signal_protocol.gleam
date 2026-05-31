@@ -1,4 +1,3 @@
-import gleam/int
 import gleam/result
 
 /// Represents a Signal Protocol session.
@@ -184,15 +183,18 @@ fn session_reference(session: Session) -> BitArray {
   }
 }
 
-// Helper function to create a binary representation of a pre-key bundle
+// Serialize a pre-key bundle to the format that the C NIF's
+// process_pre_key_bundle expects:
+//   remote_identity_key(32) ++ signed_prekey_public(32) ++ signature(32)
+// followed optionally by a 32-byte one-time prekey.
 fn create_bundle_binary(bundle: PreKeyBundle) -> BitArray {
-  // This is a simplified serialization for demonstration
-  // In a real implementation, you would use proper binary serialization
-  let registration_id_str = int.to_string(bundle.registration_id)
-  let #(pre_key_id, _pre_key_public) = bundle.pre_key
-  let #(signed_pre_key_id, _signed_pre_key_public, _signed_pre_key_signature) = bundle.signed_pre_key
-  
-  // For now, just return a simple placeholder binary
-  // This is a temporary implementation until proper serialization is needed
-  <<registration_id_str:utf8, pre_key_id:32, signed_pre_key_id:32>>
+  let #(_pre_key_id, pre_key_public) = bundle.pre_key
+  let #(_signed_pre_key_id, signed_pre_key_public, signed_pre_key_signature) =
+    bundle.signed_pre_key
+  <<
+    bundle.identity_key:bits,
+    signed_pre_key_public:bits,
+    signed_pre_key_signature:bits,
+    pre_key_public:bits,
+  >>
 }
