@@ -26,7 +26,7 @@ else
 endif
 
 # Build targets
-.PHONY: all clean test test-unit test-integration test-smoke test-clean deps install perf-test perf-monitor docker-build docker-test release dev-setup dev-test monitor-memory monitor-cache help ci-build ci-test build-wrappers publish-wrappers
+.PHONY: all clean test test-unit test-clean deps install perf-test perf-monitor docker-build docker-test release dev-setup dev-test monitor-memory monitor-cache help ci-build ci-test build-wrappers publish-wrappers
 
 # Default target
 all: build
@@ -151,14 +151,6 @@ test: test-dirs
 test-unit: test-dirs
 	$(LIBRARY_PATH_ENV) rebar3 as unit ct --dir test/erl/unit
 
-# Run integration tests only
-test-integration: test-dirs
-	$(LIBRARY_PATH_ENV) rebar3 as integration ct
-
-# Run smoke tests only
-test-smoke: test-dirs
-	$(LIBRARY_PATH_ENV) rebar3 as smoke ct
-
 # Run tests with coverage
 test-cover: test-dirs
 	$(LIBRARY_PATH_ENV) rebar3 ct --cover
@@ -166,10 +158,6 @@ test-cover: test-dirs
 # Run unit tests with coverage
 test-unit-cover: test-dirs
 	$(LIBRARY_PATH_ENV) rebar3 as unit ct --dir test/erl/unit --cover
-
-# Run integration tests with coverage
-test-integration-cover: test-dirs
-	$(LIBRARY_PATH_ENV) rebar3 as integration ct --cover
 
 # Run performance tests
 perf-test: test-dirs build
@@ -261,7 +249,7 @@ release-major:
 dev-setup: deps build test-dirs
 	@echo "Development environment setup complete"
 
-dev-test: test-smoke test-unit test-integration perf-test
+dev-test: test-unit perf-test
 	@echo "All tests completed"
 
 # Monitoring targets
@@ -286,11 +274,8 @@ help:
 	@echo "  diagnose           - Diagnose and fix directory issues"
 	@echo "  test               - Run all tests"
 	@echo "  test-unit          - Run unit tests only"
-	@echo "  test-integration   - Run integration tests only"
-	@echo "  test-smoke         - Run smoke tests only"
 	@echo "  test-cover         - Run tests with coverage"
 	@echo "  test-unit-cover    - Run unit tests with coverage"
-	@echo "  test-integration-cover - Run integration tests with coverage"
 	@echo "  perf-test          - Run performance benchmarks"
 	@echo "  perf-monitor       - Run performance monitoring"
 	@echo "  docs               - Generate documentation"

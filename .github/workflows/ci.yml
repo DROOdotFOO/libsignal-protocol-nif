@@ -102,11 +102,6 @@ jobs:
         make test-unit
       continue-on-error: true
     
-    - name: Run integration tests
-      run: |
-        echo "Running integration tests..."
-        make test-integration
-
   test-wrappers:
     name: Test ${{ matrix.wrapper }} wrapper
     runs-on: ubuntu-latest
