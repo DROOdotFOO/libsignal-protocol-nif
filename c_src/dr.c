@@ -9,32 +9,73 @@
 #include <limits.h>
 #include <string.h>
 
-// HKDF-like key derivation using BLAKE2b
-static int derive_keys(unsigned char *output, size_t output_len,
-                      const unsigned char *input, size_t input_len,
-                      const unsigned char *salt, size_t salt_len,
-                      const unsigned char *info, size_t info_len) {
-    // Use BLAKE2b with salt as key for HKDF-like derivation
-    // If salt is provided, use it as the key, otherwise use input directly
-    if (salt && salt_len > 0) {
-        return crypto_generichash(output, output_len, input, input_len, salt, salt_len);
-    } else {
-        return crypto_generichash(output, output_len, input, input_len, NULL, 0);
+// HKDF-SHA-256 (RFC 5869). Caller provides salt (use zero-filled 32 bytes if
+// none), input keying material (IKM), info, and the desired output length.
+// We produce up to N=ceil(L/32) HMAC outputs; with L<=64 this is at most 2.
+int hkdf_sha256(unsigned char *output, size_t output_len,
+                       const unsigned char *salt, size_t salt_len,
+                       const unsigned char *ikm, size_t ikm_len,
+                       const unsigned char *info, size_t info_len) {
+    if (output_len > 32 * 255) return -1;
+
+    // Extract: PRK = HMAC-SHA-256(salt, IKM). If salt is NULL, use 32 zero bytes.
+    unsigned char zero_salt[32] = {0};
+    const unsigned char *use_salt = salt ? salt : zero_salt;
+    size_t use_salt_len = salt ? salt_len : sizeof(zero_salt);
+
+    unsigned char prk[crypto_auth_hmacsha256_BYTES];  // 32
+    crypto_auth_hmacsha256_state st;
+    if (crypto_auth_hmacsha256_init(&st, use_salt, use_salt_len) != 0) return -1;
+    if (crypto_auth_hmacsha256_update(&st, ikm, ikm_len) != 0) return -1;
+    if (crypto_auth_hmacsha256_final(&st, prk) != 0) return -1;
+
+    // Expand: T(i) = HMAC-SHA-256(PRK, T(i-1) || info || i).
+    unsigned char t_prev[crypto_auth_hmacsha256_BYTES];
+    unsigned char t_curr[crypto_auth_hmacsha256_BYTES];
+    size_t produced = 0;
+    unsigned char counter = 1;
+    size_t t_prev_len = 0;
+    while (produced < output_len) {
+        if (crypto_auth_hmacsha256_init(&st, prk, sizeof(prk)) != 0) return -1;
+        if (t_prev_len > 0 &&
+            crypto_auth_hmacsha256_update(&st, t_prev, t_prev_len) != 0)
+            return -1;
+        if (info_len > 0 &&
+            crypto_auth_hmacsha256_update(&st, info, info_len) != 0)
+            return -1;
+        if (crypto_auth_hmacsha256_update(&st, &counter, 1) != 0) return -1;
+        if (crypto_auth_hmacsha256_final(&st, t_curr) != 0) return -1;
+
+        size_t take = output_len - produced;
+        if (take > sizeof(t_curr)) take = sizeof(t_curr);
+        memcpy(output + produced, t_curr, take);
+        produced += take;
+
+        memcpy(t_prev, t_curr, sizeof(t_curr));
+        t_prev_len = sizeof(t_curr);
+        counter++;
     }
+
+    sodium_memzero(prk, sizeof(prk));
+    sodium_memzero(t_prev, sizeof(t_prev));
+    sodium_memzero(t_curr, sizeof(t_curr));
+    return 0;
 }
 
-// Advance chain key using HMAC
-static void advance_chain_key(unsigned char *chain_key, const unsigned char *current_key) {
-    // Use HMAC with constant 0x01 to advance chain key
+// Advance chain key per Signal DR spec: chain_key' = HMAC-SHA-256(chain_key, 0x01).
+static void advance_chain_key(unsigned char *chain_key,
+                              const unsigned char *current_key) {
+    unsigned char constant = 0x02;  // Signal spec: 0x02 for next chain key
+    crypto_auth_hmacsha256(chain_key, &constant, 1, current_key);
+}
+
+// Derive message key per Signal DR spec: mk = HMAC-SHA-256(chain_key, 0x02).
+// (Signal uses 0x01 for message key, 0x02 for chain advance. We were flipped;
+// switching to the spec.)
+static void derive_message_key(unsigned char *message_key,
+                               const unsigned char *chain_key) {
     unsigned char constant = 0x01;
-    crypto_auth(chain_key, &constant, 1, current_key);
-}
-
-// Derive message key from chain key
-static void derive_message_key(unsigned char *message_key, const unsigned char *chain_key) {
-    // Use HMAC with constant 0x02 to derive message key
-    unsigned char constant = 0x02;
-    crypto_auth(message_key, &constant, 1, chain_key);
+    crypto_auth_hmacsha256(message_key, &constant, 1, chain_key);
 }
 
 // Find MKSKIPPED slot matching (dh_pub, message_number). Returns slot index
@@ -141,29 +182,25 @@ static int dh_ratchet(double_ratchet_state_t *state, const unsigned char *remote
         return -1;
     }
     
-    // Derive new root key and sending chain key
-    unsigned char root_chain_input[64]; // root_key + dh_output
-    memcpy(root_chain_input, state->root_key, 32);
-    memcpy(root_chain_input + 32, dh_output, 32);
-    
-    unsigned char kdf_output[64]; // new_root_key + new_chain_key
-    if (crypto_generichash(kdf_output, 64, root_chain_input, 64, NULL, 0) != 0) {
+    // KDF_RK: (new_root_key, new_chain_key) = HKDF-SHA-256(rk, dh_out, "DR-RK").
+    unsigned char kdf_output[64];
+    if (hkdf_sha256(kdf_output, 64, state->root_key, 32, dh_output, 32,
+                    (const unsigned char *)"DR-RK", 5) != 0) {
         sodium_memzero(dh_output, sizeof(dh_output));
         return -1;
     }
-    
+
     // Update state
     memcpy(state->root_key, kdf_output, 32);
     memcpy(state->send_chain_key, kdf_output + 32, 32);
     memcpy(state->dh_recv_public, remote_public_key, crypto_box_PUBLICKEYBYTES);
-    
+
     // Reset message counters
     state->prev_send_length = state->send_message_number;
     state->send_message_number = 0;
-    
+
     // Clean up sensitive data
     sodium_memzero(dh_output, sizeof(dh_output));
-    sodium_memzero(root_chain_input, sizeof(root_chain_input));
     sodium_memzero(kdf_output, sizeof(kdf_output));
 
     return 0;
@@ -180,41 +217,34 @@ static int dh_ratchet(double_ratchet_state_t *state, const unsigned char *remote
 static int dh_ratchet_recv(double_ratchet_state_t *state,
                            const unsigned char *remote_public_key) {
     unsigned char dh_output[crypto_box_BEFORENMBYTES];
-    unsigned char kdf_input[64];
     unsigned char kdf_output[64];
 
-    // Step 1: receive ratchet using CURRENT dh_send_private
+    // Step 1: receive ratchet using CURRENT dh_send_private.
     if (crypto_box_beforenm(dh_output, remote_public_key, state->dh_send_private) != 0) {
         return -1;
     }
-    memcpy(kdf_input, state->root_key, 32);
-    memcpy(kdf_input + 32, dh_output, 32);
-    if (crypto_generichash(kdf_output, 64, kdf_input, 64, NULL, 0) != 0) {
+    if (hkdf_sha256(kdf_output, 64, state->root_key, 32, dh_output, 32,
+                    (const unsigned char *)"DR-RK", 5) != 0) {
         sodium_memzero(dh_output, sizeof(dh_output));
-        sodium_memzero(kdf_input, sizeof(kdf_input));
         return -1;
     }
     memcpy(state->root_key, kdf_output, 32);
     memcpy(state->recv_chain_key, kdf_output + 32, 32);
 
-    // Step 2: generate new keypair and derive new send chain
+    // Step 2: generate new keypair and derive new send chain.
     if (crypto_box_keypair(state->dh_send_public, state->dh_send_private) != 0) {
         sodium_memzero(dh_output, sizeof(dh_output));
-        sodium_memzero(kdf_input, sizeof(kdf_input));
         sodium_memzero(kdf_output, sizeof(kdf_output));
         return -1;
     }
     if (crypto_box_beforenm(dh_output, remote_public_key, state->dh_send_private) != 0) {
         sodium_memzero(dh_output, sizeof(dh_output));
-        sodium_memzero(kdf_input, sizeof(kdf_input));
         sodium_memzero(kdf_output, sizeof(kdf_output));
         return -1;
     }
-    memcpy(kdf_input, state->root_key, 32);
-    memcpy(kdf_input + 32, dh_output, 32);
-    if (crypto_generichash(kdf_output, 64, kdf_input, 64, NULL, 0) != 0) {
+    if (hkdf_sha256(kdf_output, 64, state->root_key, 32, dh_output, 32,
+                    (const unsigned char *)"DR-RK", 5) != 0) {
         sodium_memzero(dh_output, sizeof(dh_output));
-        sodium_memzero(kdf_input, sizeof(kdf_input));
         sodium_memzero(kdf_output, sizeof(kdf_output));
         return -1;
     }
@@ -228,7 +258,6 @@ static int dh_ratchet_recv(double_ratchet_state_t *state,
     state->dh_recv_initialized = true;
 
     sodium_memzero(dh_output, sizeof(dh_output));
-    sodium_memzero(kdf_input, sizeof(kdf_input));
     sodium_memzero(kdf_output, sizeof(kdf_output));
     return 0;
 }
@@ -291,12 +320,10 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "dh_failed"));
         }
-        unsigned char kdf_in[64], kdf_out[64];
-        memcpy(kdf_in, state.root_key, 32);
-        memcpy(kdf_in + 32, dh_out, 32);
-        if (crypto_generichash(kdf_out, 64, kdf_in, 64, NULL, 0) != 0) {
+        unsigned char kdf_out[64];
+        if (hkdf_sha256(kdf_out, 64, state.root_key, 32, dh_out, 32,
+                        (const unsigned char *)"DR-RK", 5) != 0) {
             sodium_memzero(dh_out, sizeof(dh_out));
-            sodium_memzero(kdf_in, sizeof(kdf_in));
             sodium_memzero(&state, sizeof(state));
             return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "kdf_failed"));
@@ -304,7 +331,6 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         memcpy(state.root_key, kdf_out, 32);
         memcpy(state.send_chain_key, kdf_out + 32, 32);
         sodium_memzero(dh_out, sizeof(dh_out));
-        sodium_memzero(kdf_in, sizeof(kdf_in));
         sodium_memzero(kdf_out, sizeof(kdf_out));
     } else {
         // Bob's self_identity_priv is his Ed25519 secret key. Convert to

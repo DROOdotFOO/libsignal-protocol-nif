@@ -69,4 +69,10 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
+// HKDF-SHA-256 (RFC 5869). Shared between DR (KDF_RK) and X3DH (root seed).
+int hkdf_sha256(unsigned char *output, size_t output_len,
+                const unsigned char *salt, size_t salt_len,
+                const unsigned char *ikm, size_t ikm_len,
+                const unsigned char *info, size_t info_len);
+
 #endif

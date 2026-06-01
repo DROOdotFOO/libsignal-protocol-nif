@@ -1,4 +1,5 @@
 #include "session.h"
+#include "dr.h"
 #include <sodium.h>
 #include <stdbool.h>
 #include <string.h>
@@ -210,10 +211,13 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     
     memcpy(hkdf_input, f_bytes, 32);
     memcpy(hkdf_input + 32, km, km_size);
-    
-    // Use BLAKE2b (available in libsodium) as our KDF to derive 64-byte session key
+
+    // X3DH KDF (Signal spec §2.2): SK = HKDF(salt=zeros, ikm=F||KM,
+    // info=app-defined). We use "X3DH-Signal" as the info string.
     unsigned char session_key[64];
-    if (crypto_generichash(session_key, 64, hkdf_input, hkdf_input_size, NULL, 0) != 0) {
+    if (hkdf_sha256(session_key, 64, NULL, 0,
+                    hkdf_input, hkdf_input_size,
+                    (const unsigned char *)"X3DH-Signal", 11) != 0) {
         free(km);
         free(hkdf_input);
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));

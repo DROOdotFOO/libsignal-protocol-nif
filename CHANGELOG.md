@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CRITICAL FIX**: Identity keys are now Ed25519, and signed pre-keys are signed with `crypto_sign_detached` (Ed25519). The previous implementation used HMAC-SHA-512-256 with the identity *public* key as the MAC "secret" -- since the identity pub is published in bundles, any attacker who saw a published bundle could forge a valid "signature" on any signed prekey of their choosing. A network MITM could swap a victim's bundle for the attacker's signed prekey and Alice's `process_pre_key_bundle` would still accept it. With Ed25519 only the holder of the identity priv can produce a verifying signature.
 - New `x3dh_forgery_SUITE` reproduces the pre-fix HMAC-based forgery and asserts it is now rejected with `signature_verification_failed`.
 
+### Changed (cryptographic primitives)
+
+- **Breaking (DR session binary format)**: DR chain advance and message-key derivation now use HMAC-SHA-256 (Signal DR spec) instead of HMAC-SHA-512-256 (`crypto_auth`). Constants are also swapped to match the spec: chain key uses `0x02`, message key uses `0x01` (was reversed). Existing DR session binaries from prior versions cannot interoperate.
+- **Breaking (DR + X3DH wire format)**: DR root-chain KDF and X3DH KDF now use HKDF-SHA-256 (RFC 5869) instead of BLAKE2b. Info strings are `"DR-RK"` and `"X3DH-Signal"` respectively. Existing sessions from prior versions cannot interoperate. (The library is still not Signal-wire-compatible: the DR header format, AEAD cipher, and HSalsa20-after-X25519 in DH all differ from the Signal spec.)
+
 ### Added
 
 - New `x3dh_dr_compose_SUITE` (3 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret and that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow.
