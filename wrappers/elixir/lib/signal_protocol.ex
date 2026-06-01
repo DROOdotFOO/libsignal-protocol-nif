@@ -31,7 +31,7 @@ defmodule SignalProtocol do
   `HMAC-SHA256(signed_prekey_pub, key=remote_identity_pub)`.
 
   Returns `{:ok, {shared_secret(64), ephemeral_pub(32)}}` on success. The
-  shared secret is suitable to feed into `init_double_ratchet/4` as the
+  shared secret is suitable to feed into `init_double_ratchet/5` as the
   Double Ratchet root seed.
   """
   @spec process_pre_key_bundle(binary(), binary()) ::
@@ -47,16 +47,30 @@ defmodule SignalProtocol do
   # Per the Signal DR spec: Alice (initiator) sends first using Bob's identity
   # pub; Bob (responder) holds his identity priv and cannot send until Alice's
   # first message arrives. `is_alice` is `1` for the initiator, `0` for the
-  # responder. For Alice, `self_identity_priv` is ignored (she uses a fresh
-  # ephemeral); for Bob, `remote_identity_pub` is ignored.
+  # responder. `local_identity_pub` and `remote_identity_pub` are stored in DR
+  # state and folded into every message MAC (Signal-spec scope). For Alice,
+  # `self_identity_priv` may be `<<>>` (she uses a fresh ephemeral for DH).
   # ============================================================================
 
-  @spec init_double_ratchet(binary(), binary(), binary(), 0 | 1) ::
+  @spec init_double_ratchet(binary(), binary(), binary(), binary(), 0 | 1) ::
           {:ok, binary()} | {:error, term()}
-  def init_double_ratchet(shared_secret, remote_identity_pub, self_identity_priv, is_alice)
-      when is_binary(shared_secret) and is_binary(remote_identity_pub) and
-             is_binary(self_identity_priv) and is_alice in [0, 1] do
-    @nif.init_double_ratchet(shared_secret, remote_identity_pub, self_identity_priv, is_alice)
+  def init_double_ratchet(
+        shared_secret,
+        local_identity_pub,
+        remote_identity_pub,
+        self_identity_priv,
+        is_alice
+      )
+      when is_binary(shared_secret) and is_binary(local_identity_pub) and
+             is_binary(remote_identity_pub) and is_binary(self_identity_priv) and
+             is_alice in [0, 1] do
+    @nif.init_double_ratchet(
+      shared_secret,
+      local_identity_pub,
+      remote_identity_pub,
+      self_identity_priv,
+      is_alice
+    )
   end
 
   @spec dr_encrypt_message(binary(), binary()) ::

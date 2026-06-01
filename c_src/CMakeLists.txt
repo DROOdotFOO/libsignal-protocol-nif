@@ -18,6 +18,23 @@ include_directories(${SODIUM_INCLUDE_DIRS})
 link_directories(${SODIUM_LIBRARY_DIRS})
 set(SODIUM_LIBRARIES ${SODIUM_LIBRARIES})
 
+# OpenSSL provides AES-256-CBC (libsodium does not). Used by the Signal-spec
+# DR AEAD construction (AES-256-CBC + HMAC-SHA-256 + PKCS#7).
+# On macOS with Homebrew openssl@3 is keg-only; CMake's FindOpenSSL needs a
+# hint when the brew install isn't on the default search path.
+if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
+    execute_process(
+        COMMAND brew --prefix openssl@3
+        OUTPUT_VARIABLE _BREW_OPENSSL_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _BREW_OPENSSL_RESULT
+    )
+    if(_BREW_OPENSSL_RESULT EQUAL 0)
+        set(OPENSSL_ROOT_DIR "${_BREW_OPENSSL_PREFIX}")
+    endif()
+endif()
+find_package(OpenSSL REQUIRED)
+
 # Detect Erlang include directory automatically
 execute_process(
   COMMAND erl -noshell -eval "io:format(\"~s\", [code:root_dir()]), halt()."
@@ -47,20 +64,15 @@ add_library(libsignal_protocol_nif SHARED
     session.c
 )
 
-# Link libsodium to all libraries
+# Link libsodium to all libraries; OpenSSL only needed by the DR AEAD in
+# libsignal_protocol_nif.
 target_link_libraries(signal_nif ${SODIUM_LIBRARIES})
-target_link_libraries(libsignal_protocol_nif ${SODIUM_LIBRARIES})
+target_link_libraries(libsignal_protocol_nif ${SODIUM_LIBRARIES} OpenSSL::Crypto)
 
 # Remove explicit erl_nif linking; use dynamic lookup on macOS
 if(APPLE)
-    foreach(target signal_nif libsignal_protocol_nif)
-        target_link_libraries(${target} ${SODIUM_LIBRARIES})
-        target_link_options(${target} PRIVATE "-undefined" "dynamic_lookup")
-    endforeach()
-else()
-    foreach(target signal_nif libsignal_protocol_nif)
-        target_link_libraries(${target} ${SODIUM_LIBRARIES})
-    endforeach()
+    target_link_options(signal_nif PRIVATE "-undefined" "dynamic_lookup")
+    target_link_options(libsignal_protocol_nif PRIVATE "-undefined" "dynamic_lookup")
 endif()
 
 # Set output directory and name for signal_nif

@@ -9,11 +9,11 @@
     process_pre_key_bundle/2,
     encrypt_message/2,
     decrypt_message/2,
-    dr_init/4,
+    dr_init/5,
     dr_encrypt/2,
     dr_decrypt/2,
     % Double Ratchet aliases
-    init_double_ratchet/4,
+    init_double_ratchet/5,
     dr_encrypt_message/2,
     dr_decrypt_message/2
 ]).
@@ -70,11 +70,16 @@ decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet functions.
-% For Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral);
-% RemoteIdentityPub is Bob's identity public key.
-% For Bob:   RemoteIdentityPub is ignored; SelfIdentityPriv is his identity
-% private key. Bob's encrypt fails until he receives Alice's first message.
-dr_init(_SharedSecret, _RemoteIdentityPub, _SelfIdentityPriv, _IsAlice) ->
+% LocalIdentityPub and RemoteIdentityPub are Ed25519 identity public keys for
+% both ends. Both are stored in DR state and folded into every MAC (Signal-spec
+% scope: sender_id || receiver_id || version || serialized_message).
+% For Alice: SelfIdentityPriv may be <<>> (she uses a fresh ephemeral for DH);
+%   RemoteIdentityPub is Bob's identity public key.
+% For Bob:   SelfIdentityPriv is his 64B Ed25519 identity private key, used as
+%   the initial DH ratchet pair. Bob's encrypt fails until he receives Alice's
+%   first message.
+dr_init(_SharedSecret, _LocalIdentityPub, _RemoteIdentityPub,
+        _SelfIdentityPriv, _IsAlice) ->
     erlang:nif_error(nif_not_loaded).
 
 dr_encrypt(_DrSession, _Message) ->
@@ -84,8 +89,10 @@ dr_decrypt(_DrSession, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet aliases for better API
-init_double_ratchet(SharedSecret, RemoteIdentityPub, SelfIdentityPriv, IsAlice) ->
-    dr_init(SharedSecret, RemoteIdentityPub, SelfIdentityPriv, IsAlice).
+init_double_ratchet(SharedSecret, LocalIdentityPub, RemoteIdentityPub,
+                    SelfIdentityPriv, IsAlice) ->
+    dr_init(SharedSecret, LocalIdentityPub, RemoteIdentityPub,
+            SelfIdentityPriv, IsAlice).
 
 dr_encrypt_message(DrSession, Message) ->
     dr_encrypt(DrSession, Message).

@@ -15,11 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (cryptographic primitives)
 
 - **Breaking (DR session binary format)**: DR chain advance and message-key derivation now use HMAC-SHA-256 (Signal DR spec) instead of HMAC-SHA-512-256 (`crypto_auth`). Constants are also swapped to match the spec: chain key uses `0x02`, message key uses `0x01` (was reversed). Existing DR session binaries from prior versions cannot interoperate.
-- **Breaking (DR + X3DH wire format)**: DR root-chain KDF and X3DH KDF now use HKDF-SHA-256 (RFC 5869) instead of BLAKE2b. Info strings are `"DR-RK"` and `"X3DH-Signal"` respectively. Existing sessions from prior versions cannot interoperate. (The library is still not Signal-wire-compatible: the DR header format, AEAD cipher, and HSalsa20-after-X25519 in DH all differ from the Signal spec.)
+- **Breaking (DR + X3DH wire format)**: DR root-chain KDF and X3DH KDF now use HKDF-SHA-256 (RFC 5869) instead of BLAKE2b. Info strings are `"DR-RK"` and `"X3DH-Signal"` respectively. Existing sessions from prior versions cannot interoperate.
+- **Breaking (DH output)**: All DH operations in X3DH (`session.c`) and the DR ratchet (`dr.c`) now use raw X25519 (`crypto_scalarmult`) instead of `crypto_box_beforenm`, which applied HSalsa20 with the sigma constant on top of X25519. Output stays 32 bytes; downstream KDF inputs change, so DR session binaries and X3DH shared secrets from prior versions cannot interoperate. Brings the DH primitive in line with the Signal spec and makes Bob-side X3DH reconstruction implementable in Erlang via `crypto:compute_key(ecdh, _, _, x25519)`.
+- **Breaking (DR wire format)**: DR messages are now a serialized protobuf `DrMessage { ratchet_key=1, counter=2, previous_counter=3, ciphertext=4 }` matching the Signal `SignalMessage` shape. Hand-rolled varint + length-delimited encoder/decoder in `c_src/dr.c` (no new dep for the protobuf side). Existing wire messages from prior versions cannot be decrypted. Malformed wire input returns `malformed_message`.
+- **Breaking (DR AEAD → Signal-spec AES-256-CBC + HMAC-SHA-256)**: DR encryption is now Signal-spec, completing wire compatibility:
+  - 32-byte `messageKey` → `HKDF-SHA-256(salt=zeros, IKM=messageKey, info="WhisperMessageKeys", L=80)` → `cipher_key(32) || mac_key(32) || iv(16)`. No random nonce; the IV is HKDF-derived per message.
+  - Body: `AES-256-CBC(cipher_key, iv, plaintext)` with PKCS#7 padding.
+  - Authentication: `HMAC-SHA-256(mac_key, sender_id_pub(32) || receiver_id_pub(32) || version(1) || serialized_DrMessage)` truncated to 8 bytes. Constant-time verify via `CRYPTO_memcmp`; MAC is checked **before** AES-CBC decrypt to close the padding-oracle channel.
+  - Wire envelope: `version_byte(0x33) || serialized_DrMessage || mac(8)`. `0x33 = (3<<4)|3` per the Signal Protocol version-byte convention.
+  - **OpenSSL is now a build dependency** (libsodium has no AES-CBC). `find_package(OpenSSL REQUIRED)` in CMake; on macOS the build auto-discovers Homebrew's keg-only `openssl@3`.
+- **Breaking (`dr_init` / `init_double_ratchet` arity 4 → 5)**: A new `LocalIdentityPub` argument is required so both identity public keys can be folded into the Signal-spec MAC scope. DR state grows by 64 bytes to store both pubs (X25519 form). New Erlang signature: `init_double_ratchet(SharedSecret, LocalIdentityPub, RemoteIdentityPub, SelfIdentityPriv, IsAlice)`. Elixir and Gleam wrappers updated to match.
 
 ### Added
 
-- New `x3dh_dr_compose_SUITE` (3 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret and that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow.
+- New `x3dh_dr_compose_SUITE` (4 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret, that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow, and (new with the raw-X25519 switch) that an Erlang-side reconstruction of Bob's X3DH derives the same shared secret as Alice.
+- `signal_nif:ed25519_sk_to_curve25519/1` and `ed25519_pk_to_curve25519/1` — exposed for Erlang-side Bob-side X3DH reconstruction. Wrap `crypto_sign_ed25519_{sk,pk}_to_curve25519`.
 - Both wrappers now expose the Double Ratchet API:
   - Elixir: `SignalProtocol.init_double_ratchet/4`, `dr_encrypt_message/2`, `dr_decrypt_message/2`.
   - Gleam: `signal_protocol.init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`, plus `DrSession` and `DrRole` types.

@@ -170,6 +170,65 @@ static ERL_NIF_TERM verify_signature(ErlNifEnv *env, int argc, const ERL_NIF_TER
     }
 }
 
+// Convert an Ed25519 secret key (64B seed||pub form) to its X25519 private
+// scalar (32B). Mirrors libsodium's crypto_sign_ed25519_sk_to_curve25519.
+static ERL_NIF_TERM ed25519_sk_to_curve25519(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    if (argc != 1) {
+        return enif_make_badarg(env);
+    }
+
+    ErlNifBinary ed_sk;
+    if (!enif_inspect_binary(env, argv[0], &ed_sk)) {
+        return enif_make_badarg(env);
+    }
+    if (ed_sk.size != crypto_sign_SECRETKEYBYTES) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "invalid_secret_key_size"));
+    }
+
+    unsigned char x_sk[crypto_scalarmult_BYTES];
+    if (crypto_sign_ed25519_sk_to_curve25519(x_sk, ed_sk.data) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "conversion_failed"));
+    }
+
+    ERL_NIF_TERM out;
+    unsigned char *out_data = enif_make_new_binary(env, crypto_scalarmult_BYTES, &out);
+    memcpy(out_data, x_sk, crypto_scalarmult_BYTES);
+    sodium_memzero(x_sk, sizeof(x_sk));
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), out);
+}
+
+// Convert an Ed25519 public key (32B) to its X25519 public key (32B).
+// Mirrors libsodium's crypto_sign_ed25519_pk_to_curve25519.
+static ERL_NIF_TERM ed25519_pk_to_curve25519(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    if (argc != 1) {
+        return enif_make_badarg(env);
+    }
+
+    ErlNifBinary ed_pk;
+    if (!enif_inspect_binary(env, argv[0], &ed_pk)) {
+        return enif_make_badarg(env);
+    }
+    if (ed_pk.size != crypto_sign_PUBLICKEYBYTES) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "invalid_public_key_size"));
+    }
+
+    unsigned char x_pk[crypto_scalarmult_BYTES];
+    if (crypto_sign_ed25519_pk_to_curve25519(x_pk, ed_pk.data) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "conversion_failed"));
+    }
+
+    ERL_NIF_TERM out;
+    unsigned char *out_data = enif_make_new_binary(env, crypto_scalarmult_BYTES, &out);
+    memcpy(out_data, x_pk, crypto_scalarmult_BYTES);
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"), out);
+}
+
 static ERL_NIF_TERM sha512(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 1) {
@@ -349,6 +408,8 @@ static ErlNifFunc nif_funcs[] = {
     {"generate_ed25519_keypair", 0, generate_ed25519_keypair, 0},
     {"sign_data", 2, sign_data, 0},
     {"verify_signature", 3, verify_signature, 0},
+    {"ed25519_sk_to_curve25519", 1, ed25519_sk_to_curve25519, 0},
+    {"ed25519_pk_to_curve25519", 1, ed25519_pk_to_curve25519, 0},
     {"sha512", 1, sha512, 0},
     {"hmac_sha256", 2, hmac_sha256, 0},
     {"aes_gcm_encrypt", 5, aes_gcm_encrypt, 0},

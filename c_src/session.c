@@ -28,10 +28,10 @@ ERL_NIF_TERM create_session_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     ERL_NIF_TERM session_term;
     unsigned char *session_data = enif_make_new_binary(env, 64, &session_term);
     
-    // Perform Curve25519 key agreement
-    unsigned char shared_secret[crypto_box_BEFORENMBYTES];
-    if (crypto_box_beforenm(shared_secret, remote_key.data, local_key.data) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+    // Perform raw X25519 key agreement (Signal spec: no HSalsa20 post-mix).
+    unsigned char shared_secret[crypto_scalarmult_BYTES];
+    if (crypto_scalarmult(shared_secret, local_key.data, remote_key.data) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "key_agreement_failed"));
     }
     
@@ -124,19 +124,21 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     //   DH2 = DH(EK_A, IK_B)
     //   DH3 = DH(EK_A, SPK_B)
     //   DH4 = DH(EK_A, OPK_B)  (if present)
-    unsigned char dh1[crypto_box_BEFORENMBYTES];
-    unsigned char dh2[crypto_box_BEFORENMBYTES];
-    unsigned char dh3[crypto_box_BEFORENMBYTES];
-    unsigned char dh4[crypto_box_BEFORENMBYTES];
+    // Raw X25519 (crypto_scalarmult) -- Signal spec output, not the
+    // HSalsa20-of-X25519 form that crypto_box_beforenm produces.
+    unsigned char dh1[crypto_scalarmult_BYTES];
+    unsigned char dh2[crypto_scalarmult_BYTES];
+    unsigned char dh3[crypto_scalarmult_BYTES];
+    unsigned char dh4[crypto_scalarmult_BYTES];
 
-    if (crypto_box_beforenm(dh1, signed_prekey, local_x_priv) != 0) {
+    if (crypto_scalarmult(dh1, local_x_priv, signed_prekey) != 0) {
         sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "dh1_calculation_failed"));
     }
 
-    if (crypto_box_beforenm(dh2, remote_x_id_pub, ephemeral_private_key) != 0) {
+    if (crypto_scalarmult(dh2, ephemeral_private_key, remote_x_id_pub) != 0) {
         sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
         sodium_memzero(dh1, sizeof(dh1));
@@ -144,7 +146,7 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                enif_make_atom(env, "dh2_calculation_failed"));
     }
 
-    if (crypto_box_beforenm(dh3, signed_prekey, ephemeral_private_key) != 0) {
+    if (crypto_scalarmult(dh3, ephemeral_private_key, signed_prekey) != 0) {
         sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
         sodium_memzero(dh1, sizeof(dh1));
@@ -154,7 +156,7 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     }
 
     if (has_one_time_prekey) {
-        if (crypto_box_beforenm(dh4, one_time_prekey, ephemeral_private_key) != 0) {
+        if (crypto_scalarmult(dh4, ephemeral_private_key, one_time_prekey) != 0) {
             sodium_memzero(local_x_priv, sizeof(local_x_priv));
             sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
             sodium_memzero(dh1, sizeof(dh1));

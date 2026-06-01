@@ -10,6 +10,8 @@
     generate_ed25519_keypair/0,
     sign_data/2,
     verify_signature/3,
+    ed25519_sk_to_curve25519/1,
+    ed25519_pk_to_curve25519/1,
     sha512/1,
     hmac_sha256/2,
     aes_gcm_encrypt/5,
@@ -36,6 +38,12 @@ sign_data(_PrivateKey, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
 verify_signature(_PublicKey, _Message, _Signature) ->
+    erlang:nif_error(nif_not_loaded).
+
+ed25519_sk_to_curve25519(_EdSecretKey) ->
+    erlang:nif_error(nif_not_loaded).
+
+ed25519_pk_to_curve25519(_EdPublicKey) ->
     erlang:nif_error(nif_not_loaded).
 
 sha512(_Data) ->

@@ -44,6 +44,13 @@ typedef struct {
     unsigned char dh_send_public[crypto_box_PUBLICKEYBYTES];
     unsigned char dh_recv_public[crypto_box_PUBLICKEYBYTES];
 
+    // Session-bound identity pubs (X25519 form). Both sides must agree on
+    // these at init; they are folded into every MAC (Signal-spec scope:
+    // sender_id || receiver_id || version || serialized_message). Storing
+    // them in state avoids passing them on every encrypt/decrypt.
+    unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
+    unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
+
     // Previous sending chain length (for header)
     unsigned int prev_send_length;
 

@@ -5,8 +5,8 @@
 %% Bob (responder) holds his identity priv and cannot send until Alice's
 %% first message arrives and his receive ratchet derives his send chain.
 %%
-%% Exposed via init_double_ratchet/4 (SS, RemoteIdentityPub, SelfIdentityPriv,
-%% IsAlice), dr_encrypt_message/2, dr_decrypt_message/2.
+%% Exposed via init_double_ratchet/5 (SS, LocalIdentityPub, RemoteIdentityPub,
+%% SelfIdentityPriv, IsAlice), dr_encrypt_message/2, dr_decrypt_message/2.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -40,10 +40,11 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(_Name, Config) ->
+    {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(64),
-    {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, <<>>, BobPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
     [{alice, Alice}, {bob, Bob} | Config].
 
 %% ============================================================================

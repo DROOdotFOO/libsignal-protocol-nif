@@ -40,10 +40,16 @@ defmodule SignalProtocolTest do
 
   describe "Double Ratchet" do
     setup do
+      {:ok, {alice_pub, _alice_priv}} = SignalProtocol.generate_identity_key_pair()
       {:ok, {bob_pub, bob_priv}} = SignalProtocol.generate_identity_key_pair()
       shared_secret = :crypto.strong_rand_bytes(64)
-      {:ok, alice} = SignalProtocol.init_double_ratchet(shared_secret, bob_pub, <<>>, 1)
-      {:ok, bob} = SignalProtocol.init_double_ratchet(shared_secret, <<>>, bob_priv, 0)
+
+      {:ok, alice} =
+        SignalProtocol.init_double_ratchet(shared_secret, alice_pub, bob_pub, <<>>, 1)
+
+      {:ok, bob} =
+        SignalProtocol.init_double_ratchet(shared_secret, bob_pub, alice_pub, bob_priv, 0)
+
       %{alice: alice, bob: bob}
     end
 

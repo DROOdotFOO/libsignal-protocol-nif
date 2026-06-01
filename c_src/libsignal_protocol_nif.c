@@ -20,7 +20,7 @@ static ErlNifFunc nif_funcs[] = {
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
     {"encrypt_message", 2, encrypt_message, 0},
     {"decrypt_message", 2, decrypt_message, 0},
-    {"dr_init", 4, dr_init, 0},
+    {"dr_init", 5, dr_init, 0},
     {"dr_encrypt", 2, dr_encrypt, 0},
     {"dr_decrypt", 2, dr_decrypt, 0}
 };

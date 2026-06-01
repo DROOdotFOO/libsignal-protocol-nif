@@ -6,13 +6,15 @@ import signal_protocol.{Alice, Bob}
 fn strong_rand_bytes(n: Int) -> BitArray
 
 fn setup_parties() {
-  // Bob's identity must be an Ed25519 keypair so dr_init can convert it to
-  // X25519 for the initial ratchet.
+  // Both identities must be Ed25519 keypairs so dr_init can convert them to
+  // X25519 for the DH ratchet and for the MAC binding.
+  let assert Ok(alice_keys) = signal_protocol.generate_identity_key_pair()
   let assert Ok(bob_keys) = signal_protocol.generate_identity_key_pair()
   let shared_secret = strong_rand_bytes(64)
   let assert Ok(alice) =
     signal_protocol.init_double_ratchet(
       shared_secret,
+      alice_keys.public_key,
       bob_keys.public_key,
       <<>>,
       Alice,
@@ -20,7 +22,8 @@ fn setup_parties() {
   let assert Ok(bob) =
     signal_protocol.init_double_ratchet(
       shared_secret,
-      <<>>,
+      bob_keys.public_key,
+      alice_keys.public_key,
       bob_keys.private_key,
       Bob,
     )

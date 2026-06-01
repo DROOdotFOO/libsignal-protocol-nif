@@ -61,6 +61,7 @@ fn call_nif_process_pre_key_bundle(
 @external(erlang, "libsignal_protocol_nif", "init_double_ratchet")
 fn call_nif_init_double_ratchet(
   shared_secret: BitArray,
+  local_identity_pub: BitArray,
   remote_identity_pub: BitArray,
   self_identity_priv: BitArray,
   is_alice: Int,
@@ -143,14 +144,18 @@ fn encode_bundle(bundle: PreKeyBundle) -> BitArray {
 /// Initialize a Double Ratchet session.
 ///
 /// `shared_secret` must be 64 bytes (typically the X3DH output).
+/// `local_identity_pub` and `remote_identity_pub` are 32-byte Ed25519 pubs;
+/// both are stored in DR state and folded into every message MAC (Signal
+/// spec: HMAC scope is `sender_id || receiver_id || version || message`).
 ///
-/// - Alice: `remote_identity_pub` is Bob's 32-byte identity pub;
-///   `self_identity_priv` is ignored (she uses a fresh ephemeral).
-/// - Bob: `remote_identity_pub` is ignored; `self_identity_priv` is his
-///   32-byte identity priv. Bob's encrypt fails until he receives Alice's
+/// - Alice: `self_identity_priv` may be empty (she uses a fresh ephemeral
+///   for DH).
+/// - Bob: `self_identity_priv` is his 64-byte Ed25519 secret, used as the
+///   initial DH ratchet pair. Bob's encrypt fails until he receives Alice's
 ///   first message.
 pub fn init_double_ratchet(
   shared_secret: BitArray,
+  local_identity_pub: BitArray,
   remote_identity_pub: BitArray,
   self_identity_priv: BitArray,
   role: DrRole,
@@ -161,6 +166,7 @@ pub fn init_double_ratchet(
   }
   call_nif_init_double_ratchet(
     shared_secret,
+    local_identity_pub,
     remote_identity_pub,
     self_identity_priv,
     is_alice,
