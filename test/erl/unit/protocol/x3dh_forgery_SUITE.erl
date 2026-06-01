@@ -34,20 +34,19 @@ end_per_suite(_Config) ->
 %% pub as an HMAC key to "sign" an arbitrary signed prekey.
 hmac_forgery_rejected(_Config) ->
     {ok, {BobIdPub, _BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {AttackerSpkPub, _AttackerSpkPriv}} =
-        signal_nif:generate_curve25519_keypair(),
+    {ok, {AttackerSpkPub, _AttackerSpkPriv}} = signal_nif:generate_curve25519_keypair(),
     %% Old attack: HMAC-SHA512-256(spk_pub, key=id_pub). Identity pub is public
     %% so anyone can compute this. Pad to 64 bytes to match Ed25519 signature
     %% length (the new bundle format).
-    HmacShort = binary:part(crypto:mac(hmac, sha512, BobIdPub, AttackerSpkPub), 0, 32),
+    HmacShort =
+        binary:part(
+            crypto:mac(hmac, sha512, BobIdPub, AttackerSpkPub), 0, 32),
     ForgedSig = <<HmacShort/binary, HmacShort/binary>>,
-    ForgedBundle =
-        <<BobIdPub/binary, AttackerSpkPub/binary, ForgedSig/binary>>,
+    ForgedBundle = <<BobIdPub/binary, AttackerSpkPub/binary, ForgedSig/binary>>,
 
     {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     ?assertEqual({error, signature_verification_failed},
-                 libsignal_protocol_nif:process_pre_key_bundle(
-                   AliceIdPriv, ForgedBundle)).
+                 libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, ForgedBundle)).
 
 %% Random 64-byte "signature" must also be rejected.
 garbage_signature_rejected(_Config) ->
@@ -58,5 +57,4 @@ garbage_signature_rejected(_Config) ->
 
     {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     ?assertEqual({error, signature_verification_failed},
-                 libsignal_protocol_nif:process_pre_key_bundle(
-                   AliceIdPriv, Bundle)).
+                 libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle)).
