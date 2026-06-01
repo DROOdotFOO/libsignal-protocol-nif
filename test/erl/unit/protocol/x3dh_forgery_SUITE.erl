@@ -1,21 +1,22 @@
 -module(x3dh_forgery_SUITE).
 
-%% Regression: the C NIF's process_pre_key_bundle uses HMAC-SHA512-256 with the
-%% identity *public* key as the MAC key to authenticate the signed prekey.
-%% Because the "secret" key is published, anyone who has the identity pub can
-%% forge a signed-prekey "signature" -- there is no actual authentication.
-%%
-%% This suite currently asserts that forgery SUCCEEDS (proving the bug). After
-%% the Ed25519 switch, the assertion will flip to `signature_verification_failed`.
+%% Asserts that bundle signatures from non-identity-priv-holders are rejected.
+%% Before the Ed25519 switch the C NIF used HMAC-SHA512-256 with the *public*
+%% identity key as the MAC "secret", which let any attacker who saw the
+%% published bundle forge a signature on any signed prekey of their choosing
+%% -- the attack succeeded and Alice would establish a session against the
+%% attacker's prekey. With Ed25519 the signature can only be produced by the
+%% holder of the identity priv, so forgery attempts now fail with
+%% `signature_verification_failed`.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
--export([forged_bundle_currently_accepted/1]).
+-export([hmac_forgery_rejected/1, garbage_signature_rejected/1]).
 
 all() ->
-    [forged_bundle_currently_accepted].
+    [hmac_forgery_rejected, garbage_signature_rejected].
 
 init_per_suite(Config) ->
     rand:seed(exsss, {73, 79, 83}),
@@ -29,22 +30,33 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok.
 
-forged_bundle_currently_accepted(_Config) ->
-    %% Bob publishes his identity pub. That's the entire premise of bundles --
-    %% identity pubs are public.
-    {ok, {BobIdPub, _BobIdPriv}} = signal_nif:generate_curve25519_keypair(),
-
-    %% Attacker knows ONLY BobIdPub. Builds an entirely separate signed prekey
-    %% and forges the "signature" by HMAC'ing under Bob's published key.
+%% Reproduce the pre-Ed25519 attack: attacker uses Bob's published identity
+%% pub as an HMAC key to "sign" an arbitrary signed prekey.
+hmac_forgery_rejected(_Config) ->
+    {ok, {BobIdPub, _BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {AttackerSpkPub, _AttackerSpkPriv}} =
         signal_nif:generate_curve25519_keypair(),
-    ForgedSig =
-        binary:part(crypto:mac(hmac, sha512, BobIdPub, AttackerSpkPub), 0, 32),
-    ForgedBundle = <<BobIdPub/binary, AttackerSpkPub/binary, ForgedSig/binary>>,
+    %% Old attack: HMAC-SHA512-256(spk_pub, key=id_pub). Identity pub is public
+    %% so anyone can compute this. Pad to 64 bytes to match Ed25519 signature
+    %% length (the new bundle format).
+    HmacShort = binary:part(crypto:mac(hmac, sha512, BobIdPub, AttackerSpkPub), 0, 32),
+    ForgedSig = <<HmacShort/binary, HmacShort/binary>>,
+    ForgedBundle =
+        <<BobIdPub/binary, AttackerSpkPub/binary, ForgedSig/binary>>,
 
-    %% Alice processes the forged bundle. The NIF accepts it -- the
-    %% "signature verification" check passes because the HMAC key is public.
-    {ok, {_, AliceIdPriv}} = signal_nif:generate_curve25519_keypair(),
-    ?assertMatch({ok, {_SharedSecret, _EphemeralPub}},
+    {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    ?assertEqual({error, signature_verification_failed},
                  libsignal_protocol_nif:process_pre_key_bundle(
                    AliceIdPriv, ForgedBundle)).
+
+%% Random 64-byte "signature" must also be rejected.
+garbage_signature_rejected(_Config) ->
+    {ok, {BobIdPub, _BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {SpkPub, _SpkPriv}} = signal_nif:generate_curve25519_keypair(),
+    GarbageSig = rand:bytes(64),
+    Bundle = <<BobIdPub/binary, SpkPub/binary, GarbageSig/binary>>,
+
+    {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    ?assertEqual({error, signature_verification_failed},
+                 libsignal_protocol_nif:process_pre_key_bundle(
+                   AliceIdPriv, Bundle)).

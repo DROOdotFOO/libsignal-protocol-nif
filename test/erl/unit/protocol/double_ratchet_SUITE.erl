@@ -40,7 +40,7 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(_Name, Config) ->
-    {ok, {BobPub, BobPriv}} = signal_nif:generate_curve25519_keypair(),
+    {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(64),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, <<>>, 1),
     {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, <<>>, BobPriv, 0),

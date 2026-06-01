@@ -14,7 +14,7 @@ pub fn create_bundle_test() {
         Ok(pre_key) -> {
           case
             signal_protocol.generate_signed_pre_key(
-              identity_key_pair.public_key,
+              identity_key_pair.private_key,
               1,
             )
           {

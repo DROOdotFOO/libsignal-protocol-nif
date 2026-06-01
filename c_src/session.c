@@ -53,108 +53,117 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
         return enif_make_badarg(env);
     }
     
-    ErlNifBinary local_identity_key, bundle;
-    
-    if (!enif_inspect_binary(env, argv[0], &local_identity_key) ||
+    ErlNifBinary local_identity_priv, bundle;
+
+    if (!enif_inspect_binary(env, argv[0], &local_identity_priv) ||
         !enif_inspect_binary(env, argv[1], &bundle)) {
         return enif_make_badarg(env);
     }
-    
-    // Validate local identity key size (should be 32 bytes for Curve25519 private key)
-    if (local_identity_key.size != crypto_box_SECRETKEYBYTES) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+
+    // Local identity priv is an Ed25519 secret key (64 bytes).
+    if (local_identity_priv.size != crypto_sign_SECRETKEYBYTES) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_local_identity_key_size"));
     }
-    
-    // Parse the pre-key bundle
-    // Expected format: remote_identity_key(32) + signed_prekey(32) + signature(32) + [one_time_prekey(32)]
-    size_t min_bundle_size = 32 + 32 + 32; // identity + signed_prekey + signature
+
+    // Bundle format:
+    //   ed_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)
+    //   ++ [one_time_prekey_pub(32)]
+    size_t min_bundle_size = 32 + 32 + crypto_sign_BYTES;  // 128
     if (bundle.size < min_bundle_size) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_bundle_size"));
     }
-    
-    // Extract keys from bundle
-    unsigned char *remote_identity_key = bundle.data;
+
+    unsigned char *remote_ed_id_pub = bundle.data;
     unsigned char *signed_prekey = bundle.data + 32;
     unsigned char *signature = bundle.data + 64;
     unsigned char *one_time_prekey = NULL;
-    
-    // Check if one-time prekey is present
     bool has_one_time_prekey = (bundle.size >= min_bundle_size + 32);
     if (has_one_time_prekey) {
-        one_time_prekey = bundle.data + 96;
+        one_time_prekey = bundle.data + min_bundle_size;
     }
-    
-    // Verify the signed prekey signature using HMAC-SHA256
-    // Message to verify: signed_prekey (32 bytes)
-    unsigned char computed_signature[32];
-    if (crypto_auth(computed_signature, signed_prekey, 32, remote_identity_key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "signature_computation_failed"));
-    }
-    
-    // Verify signature matches
-    if (crypto_verify_32(computed_signature, signature) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+
+    // Ed25519 verify the signed prekey signature using the *remote* identity
+    // pub as the verification key. Only the holder of the matching identity
+    // priv can produce a signature that verifies.
+    if (crypto_sign_verify_detached(signature, signed_prekey, 32,
+                                    remote_ed_id_pub) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "signature_verification_failed"));
     }
-    
-    // Generate ephemeral key pair for this X3DH exchange
+
+    // For X25519 DH operations we need the curve forms of the identity keys.
+    unsigned char local_x_priv[crypto_box_SECRETKEYBYTES];
+    unsigned char remote_x_id_pub[crypto_box_PUBLICKEYBYTES];
+    if (crypto_sign_ed25519_sk_to_curve25519(local_x_priv,
+                                             local_identity_priv.data) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "identity_priv_conversion_failed"));
+    }
+    if (crypto_sign_ed25519_pk_to_curve25519(remote_x_id_pub,
+                                             remote_ed_id_pub) != 0) {
+        sodium_memzero(local_x_priv, sizeof(local_x_priv));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "identity_pub_conversion_failed"));
+    }
+
+    // Generate ephemeral key pair for this X3DH exchange.
     unsigned char ephemeral_public_key[crypto_box_PUBLICKEYBYTES];
     unsigned char ephemeral_private_key[crypto_box_SECRETKEYBYTES];
-    
+
     if (crypto_box_keypair(ephemeral_public_key, ephemeral_private_key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        sodium_memzero(local_x_priv, sizeof(local_x_priv));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "ephemeral_key_generation_failed"));
     }
-    
-    // Perform X3DH key agreement calculations
-    // DH1 = DH(IKA, SPKB) - Identity key with signed prekey
-    // DH2 = DH(EKA, IKB) - Ephemeral key with identity key  
-    // DH3 = DH(EKA, SPKB) - Ephemeral key with signed prekey
-    // DH4 = DH(EKA, OPKB) - Ephemeral key with one-time prekey (if present)
-    
+
+    // X3DH (Signal spec §3.3, Alice's side):
+    //   DH1 = DH(IK_A, SPK_B)
+    //   DH2 = DH(EK_A, IK_B)
+    //   DH3 = DH(EK_A, SPK_B)
+    //   DH4 = DH(EK_A, OPK_B)  (if present)
     unsigned char dh1[crypto_box_BEFORENMBYTES];
     unsigned char dh2[crypto_box_BEFORENMBYTES];
     unsigned char dh3[crypto_box_BEFORENMBYTES];
     unsigned char dh4[crypto_box_BEFORENMBYTES];
-    
-    // DH1 = DH(local_identity_private, remote_signed_prekey)
-    if (crypto_box_beforenm(dh1, signed_prekey, local_identity_key.data) != 0) {
+
+    if (crypto_box_beforenm(dh1, signed_prekey, local_x_priv) != 0) {
+        sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "dh1_calculation_failed"));
     }
-    
-    // DH2 = DH(ephemeral_private, remote_identity_key)
-    if (crypto_box_beforenm(dh2, remote_identity_key, ephemeral_private_key) != 0) {
+
+    if (crypto_box_beforenm(dh2, remote_x_id_pub, ephemeral_private_key) != 0) {
+        sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
         sodium_memzero(dh1, sizeof(dh1));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "dh2_calculation_failed"));
     }
-    
-    // DH3 = DH(ephemeral_private, remote_signed_prekey)
+
     if (crypto_box_beforenm(dh3, signed_prekey, ephemeral_private_key) != 0) {
+        sodium_memzero(local_x_priv, sizeof(local_x_priv));
         sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
         sodium_memzero(dh1, sizeof(dh1));
         sodium_memzero(dh2, sizeof(dh2));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "dh3_calculation_failed"));
     }
-    
-    // DH4 = DH(ephemeral_private, one_time_prekey) - only if one-time prekey present
+
     if (has_one_time_prekey) {
         if (crypto_box_beforenm(dh4, one_time_prekey, ephemeral_private_key) != 0) {
+            sodium_memzero(local_x_priv, sizeof(local_x_priv));
             sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
             sodium_memzero(dh1, sizeof(dh1));
             sodium_memzero(dh2, sizeof(dh2));
             sodium_memzero(dh3, sizeof(dh3));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "dh4_calculation_failed"));
         }
     }
+    sodium_memzero(local_x_priv, sizeof(local_x_priv));
     
     // Concatenate DH outputs for KDF input
     // KM = DH1 || DH2 || DH3 || DH4 (if present)

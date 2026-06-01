@@ -11,9 +11,9 @@
 %% cover the "given a shared secret, DR works" half; this suite covers the
 %% "process_pre_key_bundle output is a valid DR shared secret" half.)
 %%
-%% Bundle signature is HMAC-SHA512-256(spk_pub, key=id_pub) -- the C uses
-%% libsodium's crypto_auth which is HMAC-SHA512-256 (NOT HMAC-SHA256 despite
-%% the comment in session.c).
+%% The bundle signed-prekey signature is Ed25519 (libsodium crypto_sign).
+%% Identity keypairs are Ed25519 (32B pub, 64B priv); the NIF converts to
+%% X25519 internally for DH operations.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -43,11 +43,10 @@ end_per_suite(_Config) ->
 %% Build Bob's published bundle. Returns {Bundle, BobIdPub, BobIdPriv} so the
 %% test can also init Bob's DR side with the matching identity priv.
 build_bundle() ->
-    {ok, {BobIdPub, BobIdPriv}} = signal_nif:generate_curve25519_keypair(),
-    {ok, {SpkPub, _SpkPriv}} = signal_nif:generate_curve25519_keypair(),
-    Signature =
-        binary:part(
-            crypto:mac(hmac, sha512, BobIdPub, SpkPub), 0, 32),
+    {ok, {BobIdPub, BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    %% Use the NIF's own helper to mint a properly-signed prekey.
+    {ok, {_KeyId, SpkPub, Signature}} =
+        libsignal_protocol_nif:generate_signed_pre_key(BobIdPriv, 1),
     Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary>>,
     {Bundle, BobIdPub, BobIdPriv}.
 
@@ -56,14 +55,14 @@ build_bundle() ->
 %% ============================================================================
 
 x3dh_returns_64_byte_secret(_Config) ->
-    {ok, {_, AliceIdPriv}} = signal_nif:generate_curve25519_keypair(),
+    {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, _BobIdPub, _BobIdPriv} = build_bundle(),
     {ok, {SS, EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
     ?assertEqual(64, byte_size(SS)),
     ?assertEqual(32, byte_size(EphPub)).
 
 dr_handshake_after_x3dh(_Config) ->
-    {ok, {_, AliceIdPriv}} = signal_nif:generate_curve25519_keypair(),
+    {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, BobIdPub, <<>>, 1),
@@ -83,7 +82,7 @@ random_trials(_Config) ->
     ok.
 
 run_trial() ->
-    {ok, {_, AliceIdPriv}} = signal_nif:generate_curve25519_keypair(),
+    {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, BobIdPub, <<>>, 1),

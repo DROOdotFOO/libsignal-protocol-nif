@@ -12,9 +12,10 @@ pub type PreKeyBundle {
   )
 }
 
-/// Identity key pair (Curve25519): public key + signature material.
+/// Identity key pair (Ed25519). `public_key` is 32 bytes; `private_key` is
+/// 64 bytes (libsodium's secret-key encoding: seed ++ derived pub).
 pub type IdentityKeyPair {
-  IdentityKeyPair(public_key: BitArray, signature: BitArray)
+  IdentityKeyPair(public_key: BitArray, private_key: BitArray)
 }
 
 /// One-time pre-key.

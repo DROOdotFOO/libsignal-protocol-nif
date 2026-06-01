@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **CRITICAL FIX**: Identity keys are now Ed25519, and signed pre-keys are signed with `crypto_sign_detached` (Ed25519). The previous implementation used HMAC-SHA-512-256 with the identity *public* key as the MAC "secret" -- since the identity pub is published in bundles, any attacker who saw a published bundle could forge a valid "signature" on any signed prekey of their choosing. A network MITM could swap a victim's bundle for the attacker's signed prekey and Alice's `process_pre_key_bundle` would still accept it. With Ed25519 only the holder of the identity priv can produce a verifying signature.
+- New `x3dh_forgery_SUITE` reproduces the pre-fix HMAC-based forgery and asserts it is now rejected with `signature_verification_failed`.
+
 ### Added
 
 - New `x3dh_dr_compose_SUITE` (3 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret and that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow.
@@ -24,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `wrappers/gleam/src/session.gleam` and `wrappers/gleam/test/session_test.gleam` — every function passed a session ref where the C NIF expects a 32-byte identity private key. Mismatch was structural, not fixable without an API rewrite.
 - **Breaking**: `:libsignal_protocol_nif.create_session/1` — semantically broken (hash of a public key + 32 random bytes, no actual key agreement). `create_session/2` (proper Curve25519 DH) is unchanged.
+
+### Breaking changes (Ed25519 switch)
+
+- `generate_identity_key_pair/0` now returns a 32-byte Ed25519 public key + **64-byte** Ed25519 private key (was 32-byte X25519 public + 32-byte X25519 private).
+- `generate_signed_pre_key(IdentityPriv, KeyId)` now takes a 64-byte Ed25519 priv and returns a **64-byte** Ed25519 signature (was 32-byte HMAC).
+- Bundle binary format grew: `id_pub(32) ++ spk_pub(32) ++ signature(64) ++ [opk(32)]` (signature was 32B, now 64B). Minimum bundle size: 128 bytes.
+- `init_double_ratchet/4` now expects Ed25519 identity keys on both sides; conversion to X25519 for DH happens inside the NIF.
+- Gleam `IdentityKeyPair` record field renamed: `signature` → `private_key` (the field always held the private key; the old name was actively dangerous).
 
 ## [0.2.0] - 2026-06-01
 

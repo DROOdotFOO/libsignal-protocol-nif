@@ -2,21 +2,28 @@ import gleam/bit_array
 import gleeunit/should
 import signal_protocol.{Alice, Bob}
 
-// 64-byte shared secret + Bob's curve25519 identity keypair.
-// signal_nif:generate_curve25519_keypair/0 is the canonical source.
-@external(erlang, "signal_nif", "generate_curve25519_keypair")
-fn generate_curve25519_keypair() -> Result(#(BitArray, BitArray), String)
-
 @external(erlang, "crypto", "strong_rand_bytes")
 fn strong_rand_bytes(n: Int) -> BitArray
 
 fn setup_parties() {
-  let assert Ok(#(bob_pub, bob_priv)) = generate_curve25519_keypair()
+  // Bob's identity must be an Ed25519 keypair so dr_init can convert it to
+  // X25519 for the initial ratchet.
+  let assert Ok(bob_keys) = signal_protocol.generate_identity_key_pair()
   let shared_secret = strong_rand_bytes(64)
   let assert Ok(alice) =
-    signal_protocol.init_double_ratchet(shared_secret, bob_pub, <<>>, Alice)
+    signal_protocol.init_double_ratchet(
+      shared_secret,
+      bob_keys.public_key,
+      <<>>,
+      Alice,
+    )
   let assert Ok(bob) =
-    signal_protocol.init_double_ratchet(shared_secret, <<>>, bob_priv, Bob)
+    signal_protocol.init_double_ratchet(
+      shared_secret,
+      <<>>,
+      bob_keys.private_key,
+      Bob,
+    )
   #(alice, bob)
 }
 

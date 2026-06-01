@@ -265,16 +265,22 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     memcpy(state.root_key, shared_secret.data, 32);
 
     if (is_alice) {
-        if (remote_public_key.size != crypto_box_PUBLICKEYBYTES) {
+        // Alice's remote_identity_pub is the peer's Ed25519 identity pub.
+        // Convert to X25519 for DH.
+        if (remote_public_key.size != crypto_sign_PUBLICKEYBYTES) {
             return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "invalid_remote_public_key_size"));
+        }
+        if (crypto_sign_ed25519_pk_to_curve25519(state.dh_recv_public,
+                                                 remote_public_key.data) != 0) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "identity_pub_conversion_failed"));
         }
         // Fresh ephemeral DH pair
         if (crypto_box_keypair(state.dh_send_public, state.dh_send_private) != 0) {
             return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "key_generation_failed"));
         }
-        memcpy(state.dh_recv_public, remote_public_key.data, crypto_box_PUBLICKEYBYTES);
         state.dh_recv_initialized = true;
 
         // Initial send ratchet: KDF_RK(root, DH(alice_eph_priv, bob_pub))
@@ -301,11 +307,17 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         sodium_memzero(kdf_in, sizeof(kdf_in));
         sodium_memzero(kdf_out, sizeof(kdf_out));
     } else {
-        if (self_priv.size != crypto_box_SECRETKEYBYTES) {
+        // Bob's self_identity_priv is his Ed25519 secret key. Convert to
+        // X25519 priv for the initial send ratchet.
+        if (self_priv.size != crypto_sign_SECRETKEYBYTES) {
             return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                    enif_make_atom(env, "invalid_self_priv_size"));
         }
-        memcpy(state.dh_send_private, self_priv.data, crypto_box_SECRETKEYBYTES);
+        if (crypto_sign_ed25519_sk_to_curve25519(state.dh_send_private,
+                                                 self_priv.data) != 0) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "identity_priv_conversion_failed"));
+        }
         crypto_scalarmult_base(state.dh_send_public, state.dh_send_private);
         // dh_recv_public stays zero; dh_recv_initialized stays false.
         // send_chain_key / recv_chain_key stay zero -- set on first receive.

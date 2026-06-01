@@ -11,7 +11,7 @@ pub fn generate_identity_key_pair_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       should.equal(bit_array.byte_size(identity_key_pair.public_key) > 0, True)
-      should.equal(bit_array.byte_size(identity_key_pair.signature) > 0, True)
+      should.equal(bit_array.byte_size(identity_key_pair.private_key) > 0, True)
     }
     Error(_e) -> should.fail()
   }
@@ -31,7 +31,7 @@ pub fn generate_signed_pre_key_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       case
-        signal_protocol.generate_signed_pre_key(identity_key_pair.public_key, 1)
+        signal_protocol.generate_signed_pre_key(identity_key_pair.private_key, 1)
       {
         Ok(signed_pre_key) -> {
           should.equal(signed_pre_key.key_id, 1)
@@ -53,7 +53,7 @@ pub fn basic_functionality_test() {
         Ok(pre_key) -> {
           case
             signal_protocol.generate_signed_pre_key(
-              identity_key_pair.public_key,
+              identity_key_pair.private_key,
               1,
             )
           {

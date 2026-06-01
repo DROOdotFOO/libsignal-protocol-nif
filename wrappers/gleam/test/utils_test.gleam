@@ -6,7 +6,7 @@ pub fn generate_user_keys_test() {
   case utils.generate_user_keys() {
     Ok(#(identity_key_pair, pre_key, signed_pre_key)) -> {
       should.equal(bit_array.byte_size(identity_key_pair.public_key) > 0, True)
-      should.equal(bit_array.byte_size(identity_key_pair.signature) > 0, True)
+      should.equal(bit_array.byte_size(identity_key_pair.private_key) > 0, True)
       should.equal(pre_key.key_id, 1)
       should.equal(bit_array.byte_size(pre_key.public_key) > 0, True)
       should.equal(signed_pre_key.key_id, 1)
