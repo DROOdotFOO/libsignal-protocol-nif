@@ -5,7 +5,6 @@
     generate_identity_key_pair/0,
     generate_pre_key/1,
     generate_signed_pre_key/2,
-    create_session/1,
     create_session/2,
     process_pre_key_bundle/2,
     encrypt_message/2,
@@ -56,9 +55,6 @@ generate_pre_key(_KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
 generate_signed_pre_key(_IdentityKey, _KeyId) ->
-    erlang:nif_error(nif_not_loaded).
-
-create_session(_PublicKey) ->
     erlang:nif_error(nif_not_loaded).
 
 create_session(_LocalKey, _RemoteKey) ->

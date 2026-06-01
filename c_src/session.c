@@ -3,38 +3,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-// Create session (single argument version) - generate session key from public key
-ERL_NIF_TERM create_session_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    if (argc != 1) {
-        return enif_make_badarg(env);
-    }
-    
-    ErlNifBinary public_key;
-    if (!enif_inspect_binary(env, argv[0], &public_key)) {
-        return enif_make_badarg(env);
-    }
-    
-    // Validate public key size
-    if (public_key.size != crypto_box_PUBLICKEYBYTES) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_public_key_size"));
-    }
-    
-    // Create session state with derived key
-    ERL_NIF_TERM session_term;
-    unsigned char *session_data = enif_make_new_binary(env, 64, &session_term);
-    
-    // Use public key as base for session key (simplified approach)
-    // In a real implementation, this would involve proper key agreement
-    crypto_generichash(session_data, 32, public_key.data, public_key.size, NULL, 0);
-    
-    // Add some randomness for the rest of the session state
-    randombytes_buf(session_data + 32, 32);
-    
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), session_term);
-}
-
 // Create session (two argument version) - perform key agreement
 ERL_NIF_TERM create_session_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {

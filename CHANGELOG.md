@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `x3dh_dr_compose_SUITE` (3 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret and that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow.
 - Both wrappers now expose the Double Ratchet API:
   - Elixir: `SignalProtocol.init_double_ratchet/4`, `dr_encrypt_message/2`, `dr_decrypt_message/2`.
   - Gleam: `signal_protocol.init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`, plus `DrSession` and `DrRole` types.
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `wrappers/gleam/src/session.gleam` and `wrappers/gleam/test/session_test.gleam` — every function passed a session ref where the C NIF expects a 32-byte identity private key. Mismatch was structural, not fixable without an API rewrite.
+- **Breaking**: `:libsignal_protocol_nif.create_session/1` — semantically broken (hash of a public key + 32 random bytes, no actual key agreement). `create_session/2` (proper Curve25519 DH) is unchanged.
 
 ## [0.2.0] - 2026-06-01
 

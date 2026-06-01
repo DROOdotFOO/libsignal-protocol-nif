@@ -16,7 +16,6 @@ static ErlNifFunc nif_funcs[] = {
     {"generate_identity_key_pair", 0, generate_identity_key_pair, 0},
     {"generate_pre_key", 1, generate_pre_key, 0},
     {"generate_signed_pre_key", 2, generate_signed_pre_key, 0},
-    {"create_session", 1, create_session_1, 0},
     {"create_session", 2, create_session_2, 0},
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
     {"encrypt_message", 2, encrypt_message, 0},
