@@ -73,6 +73,26 @@ fn call_nif_decrypt_message(
   ciphertext: BitArray,
 ) -> Result(BitArray, String)
 
+@external(erlang, "libsignal_protocol_nif", "init_double_ratchet")
+fn call_nif_init_double_ratchet(
+  shared_secret: BitArray,
+  remote_identity_pub: BitArray,
+  self_identity_priv: BitArray,
+  is_alice: Int,
+) -> Result(BitArray, String)
+
+@external(erlang, "libsignal_protocol_nif", "dr_encrypt_message")
+fn call_nif_dr_encrypt(
+  dr_session: BitArray,
+  message: BitArray,
+) -> Result(#(BitArray, BitArray), String)
+
+@external(erlang, "libsignal_protocol_nif", "dr_decrypt_message")
+fn call_nif_dr_decrypt(
+  dr_session: BitArray,
+  ciphertext: BitArray,
+) -> Result(#(BitArray, BitArray), String)
+
 // --- Public API ---
 
 /// Generates a new identity key pair.
@@ -147,6 +167,73 @@ pub fn decrypt_message(
   ciphertext: BitArray,
 ) -> Result(BitArray, String) {
   call_nif_decrypt_message(session_reference(session), ciphertext)
+}
+
+/// Opaque Double Ratchet session state (~2.6 KB).
+pub type DrSession {
+  DrSession(state: BitArray)
+}
+
+/// Whether this party initiates (Alice) or responds (Bob) in the DR handshake.
+pub type DrRole {
+  Alice
+  Bob
+}
+
+/// Initialize a Double Ratchet session.
+///
+/// `shared_secret` must be 64 bytes (typically the X3DH output).
+///
+/// - Alice: `remote_identity_pub` is Bob's 32-byte identity pub;
+///   `self_identity_priv` is ignored (she uses a fresh ephemeral).
+/// - Bob: `remote_identity_pub` is ignored; `self_identity_priv` is his
+///   32-byte identity priv. Bob's encrypt fails until he receives Alice's
+///   first message.
+pub fn init_double_ratchet(
+  shared_secret: BitArray,
+  remote_identity_pub: BitArray,
+  self_identity_priv: BitArray,
+  role: DrRole,
+) -> Result(DrSession, String) {
+  let is_alice = case role {
+    Alice -> 1
+    Bob -> 0
+  }
+  call_nif_init_double_ratchet(
+    shared_secret,
+    remote_identity_pub,
+    self_identity_priv,
+    is_alice,
+  )
+  |> result.map(DrSession)
+}
+
+/// Encrypt a message under the Double Ratchet. Returns the ciphertext and the
+/// advanced session state.
+pub fn dr_encrypt_message(
+  session: DrSession,
+  message: BitArray,
+) -> Result(#(BitArray, DrSession), String) {
+  let DrSession(state) = session
+  call_nif_dr_encrypt(state, message)
+  |> result.map(fn(pair) {
+    let #(ct, next) = pair
+    #(ct, DrSession(next))
+  })
+}
+
+/// Decrypt a Double Ratchet ciphertext. Returns the plaintext and the
+/// advanced session state.
+pub fn dr_decrypt_message(
+  session: DrSession,
+  ciphertext: BitArray,
+) -> Result(#(BitArray, DrSession), String) {
+  let DrSession(state) = session
+  call_nif_dr_decrypt(state, ciphertext)
+  |> result.map(fn(pair) {
+    let #(pt, next) = pair
+    #(pt, DrSession(next))
+  })
 }
 
 /// Creates a new session and processes a pre-key bundle in one step.

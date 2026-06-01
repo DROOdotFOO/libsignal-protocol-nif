@@ -42,4 +42,36 @@ defmodule SignalProtocol do
   def decrypt_message(session, ciphertext) when is_reference(session) and is_binary(ciphertext) do
     @nif.decrypt_message(session, ciphertext)
   end
+
+  # ============================================================================
+  # Double Ratchet
+  #
+  # Per the Signal DR spec: Alice (initiator) sends first using Bob's identity
+  # pub; Bob (responder) holds his identity priv and cannot send until Alice's
+  # first message arrives. `is_alice` is `1` for the initiator, `0` for the
+  # responder. For Alice, `self_identity_priv` is ignored (she uses a fresh
+  # ephemeral); for Bob, `remote_identity_pub` is ignored.
+  # ============================================================================
+
+  @spec init_double_ratchet(binary(), binary(), binary(), 0 | 1) ::
+          {:ok, binary()} | {:error, term()}
+  def init_double_ratchet(shared_secret, remote_identity_pub, self_identity_priv, is_alice)
+      when is_binary(shared_secret) and is_binary(remote_identity_pub) and
+             is_binary(self_identity_priv) and is_alice in [0, 1] do
+    @nif.init_double_ratchet(shared_secret, remote_identity_pub, self_identity_priv, is_alice)
+  end
+
+  @spec dr_encrypt_message(binary(), binary()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def dr_encrypt_message(dr_session, message)
+      when is_binary(dr_session) and is_binary(message) do
+    @nif.dr_encrypt_message(dr_session, message)
+  end
+
+  @spec dr_decrypt_message(binary(), binary()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def dr_decrypt_message(dr_session, ciphertext)
+      when is_binary(dr_session) and is_binary(ciphertext) do
+    @nif.dr_decrypt_message(dr_session, ciphertext)
+  end
 end

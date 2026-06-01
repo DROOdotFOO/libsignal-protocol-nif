@@ -33,4 +33,32 @@ defmodule SignalProtocolTest do
     assert is_binary(session)
     assert byte_size(session) > 0
   end
+
+  describe "Double Ratchet" do
+    setup do
+      {:ok, {bob_pub, bob_priv}} = :signal_nif.generate_curve25519_keypair()
+      shared_secret = :crypto.strong_rand_bytes(64)
+      {:ok, alice} = SignalProtocol.init_double_ratchet(shared_secret, bob_pub, <<>>, 1)
+      {:ok, bob} = SignalProtocol.init_double_ratchet(shared_secret, <<>>, bob_priv, 0)
+      %{alice: alice, bob: bob}
+    end
+
+    test "Alice -> Bob first message round-trips", %{alice: alice, bob: bob} do
+      msg = "hello from alice"
+      assert {:ok, {ct, _alice1}} = SignalProtocol.dr_encrypt_message(alice, msg)
+      assert {:ok, {^msg, _bob1}} = SignalProtocol.dr_decrypt_message(bob, ct)
+    end
+
+    test "bob cannot send before receiving Alice's first message", %{bob: bob} do
+      assert {:error, :must_receive_first} =
+               SignalProtocol.dr_encrypt_message(bob, "premature reply")
+    end
+
+    test "bidirectional handshake", %{alice: alice, bob: bob} do
+      {:ok, {ct_a2b, _alice1}} = SignalProtocol.dr_encrypt_message(alice, "hi bob")
+      {:ok, {"hi bob", bob1}} = SignalProtocol.dr_decrypt_message(bob, ct_a2b)
+      {:ok, {ct_b2a, _bob2}} = SignalProtocol.dr_encrypt_message(bob1, "hi alice")
+      {:ok, {"hi alice", _alice2}} = SignalProtocol.dr_decrypt_message(alice, ct_b2a)
+    end
+  end
 end
