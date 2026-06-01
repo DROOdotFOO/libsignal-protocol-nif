@@ -41,6 +41,42 @@ defmodule SignalProtocol do
     @nif.process_pre_key_bundle(local_identity_priv, bundle)
   end
 
+  @doc """
+  Bob's side of X3DH. Recovers the same 64-byte shared secret Alice derived
+  via `process_pre_key_bundle/2`.
+
+  Inputs:
+    * `identity_priv` - Bob's 64-byte Ed25519 identity private key.
+    * `signed_pre_key_priv` - 32-byte X25519 private key matching the SPK
+      Alice consumed from Bob's bundle.
+    * `one_time_pre_key_priv` - 32-byte X25519 private key matching the OPK
+      Alice consumed, or `<<>>` if no OPK was used.
+    * `remote_identity_pub` - Alice's 32-byte Ed25519 identity public key,
+      extracted from the PreKeySignalMessage.
+    * `remote_ephemeral_pub` - Alice's 32-byte X25519 ephemeral public key,
+      also extracted from the PreKeySignalMessage (the `base_key` field).
+  """
+  @spec process_pre_key_bundle_bob(binary(), binary(), binary(), binary(), binary()) ::
+          {:ok, binary()} | {:error, term()}
+  def process_pre_key_bundle_bob(
+        identity_priv,
+        signed_pre_key_priv,
+        one_time_pre_key_priv,
+        remote_identity_pub,
+        remote_ephemeral_pub
+      )
+      when is_binary(identity_priv) and is_binary(signed_pre_key_priv) and
+             is_binary(one_time_pre_key_priv) and is_binary(remote_identity_pub) and
+             is_binary(remote_ephemeral_pub) do
+    @nif.process_pre_key_bundle_bob(
+      identity_priv,
+      signed_pre_key_priv,
+      one_time_pre_key_priv,
+      remote_identity_pub,
+      remote_ephemeral_pub
+    )
+  end
+
   # ============================================================================
   # Double Ratchet
   #
@@ -85,5 +121,57 @@ defmodule SignalProtocol do
   def dr_decrypt_message(dr_session, ciphertext)
       when is_binary(dr_session) and is_binary(ciphertext) do
     @nif.dr_decrypt_message(dr_session, ciphertext)
+  end
+
+  @doc """
+  Encrypt Alice's first message and wrap it in a PreKeySignalMessage envelope
+  so Bob can recover the X3DH shared secret before decrypting.
+
+  `pre_key_info` is a 4-tuple `{registration_id, one_time_pre_key_id_or_nil,
+  signed_pre_key_id, alice_x3dh_ephemeral_pub}`. The ephemeral pub is the
+  32-byte X25519 key returned by `process_pre_key_bundle/2`.
+
+  Returns `{:ok, {pksm_wire_bytes, new_session}}` on success.
+  """
+  @spec dr_encrypt_prekey(binary(), binary(),
+          {non_neg_integer(), non_neg_integer() | nil, non_neg_integer(), binary()}) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def dr_encrypt_prekey(dr_session, message,
+        {registration_id, opk_id, spk_id, alice_ephemeral_pub} = _pre_key_info)
+      when is_binary(dr_session) and is_binary(message) and
+             is_integer(registration_id) and (is_nil(opk_id) or is_integer(opk_id)) and
+             is_integer(spk_id) and is_binary(alice_ephemeral_pub) do
+    opk_term = if opk_id == nil, do: :undefined, else: opk_id
+    @nif.dr_encrypt_prekey(dr_session, message,
+                           {registration_id, opk_term, spk_id, alice_ephemeral_pub})
+  end
+
+  @doc """
+  Decode a PreKeySignalMessage wire envelope produced by `dr_encrypt_prekey/3`.
+
+  Returns
+    `{:ok, {registration_id, base_key, identity_key, one_time_pre_key_id_or_nil,
+            signed_pre_key_id, inner_dr_message}}`
+  on success, or `{:error, :malformed_message}` on malformed input.
+
+  Bob's typical flow:
+    1. `pksm_decode/1` to extract fields and the inner DR message.
+    2. Look up his SPK + OPK private keys by id.
+    3. `process_pre_key_bundle_bob/5` to derive the same SK Alice has.
+    4. `init_double_ratchet/5` (as Bob, `is_alice = 0`).
+    5. `dr_decrypt_message/2` on the inner DR message.
+  """
+  @spec pksm_decode(binary()) ::
+          {:ok, {non_neg_integer(), binary(), binary(),
+                 non_neg_integer() | nil, non_neg_integer(), binary()}}
+          | {:error, term()}
+  def pksm_decode(wire) when is_binary(wire) do
+    case @nif.pksm_decode(wire) do
+      {:ok, {reg, base, id, :undefined, spk, msg}} ->
+        {:ok, {reg, base, id, nil, spk, msg}}
+
+      other ->
+        other
+    end
   end
 end

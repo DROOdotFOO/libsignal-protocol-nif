@@ -1,3 +1,4 @@
+import gleam/option.{type Option}
 import gleam/result
 
 /// Pre-key bundle: the public material a remote party publishes so others
@@ -78,6 +79,30 @@ fn call_nif_dr_decrypt(
   dr_session: BitArray,
   ciphertext: BitArray,
 ) -> Result(#(BitArray, BitArray), String)
+
+@external(erlang, "libsignal_protocol_gleam_ffi", "process_pre_key_bundle_bob")
+fn call_nif_process_pre_key_bundle_bob(
+  identity_priv: BitArray,
+  signed_pre_key_priv: BitArray,
+  one_time_pre_key_priv: BitArray,
+  remote_identity_pub: BitArray,
+  remote_ephemeral_pub: BitArray,
+) -> Result(BitArray, String)
+
+@external(erlang, "libsignal_protocol_gleam_ffi", "dr_encrypt_prekey")
+fn call_nif_dr_encrypt_prekey(
+  dr_session: BitArray,
+  message: BitArray,
+  pre_key_info: #(Int, Option(Int), Int, BitArray),
+) -> Result(#(BitArray, BitArray), String)
+
+@external(erlang, "libsignal_protocol_gleam_ffi", "pksm_decode")
+fn call_nif_pksm_decode(
+  wire: BitArray,
+) -> Result(
+  #(Int, BitArray, BitArray, Option(Int), Int, BitArray),
+  String,
+)
 
 // --- Key generation ---
 
@@ -199,5 +224,83 @@ pub fn dr_decrypt_message(
   |> result.map(fn(pair) {
     let #(pt, next) = pair
     #(pt, DrSession(next))
+  })
+}
+
+// --- PreKeySignalMessage (Alice's first message envelope) ---
+
+/// Information Alice must include in her first PreKeySignalMessage so Bob
+/// can identify which of his prekeys to consume and recover the X3DH
+/// shared secret.
+pub type PreKeyInfo {
+  PreKeyInfo(
+    registration_id: Int,
+    one_time_pre_key_id: Option(Int),
+    signed_pre_key_id: Int,
+    alice_ephemeral_pub: BitArray,
+  )
+}
+
+/// A parsed PreKeySignalMessage. `inner_message` is the serialized inner
+/// SignalMessage and is fed to `dr_decrypt_message` after the recipient
+/// has initialized their Double Ratchet from the recovered X3DH secret.
+pub type PksmMessage {
+  PksmMessage(
+    registration_id: Int,
+    base_key: BitArray,
+    identity_key: BitArray,
+    one_time_pre_key_id: Option(Int),
+    signed_pre_key_id: Int,
+    inner_message: BitArray,
+  )
+}
+
+/// Bob's side of X3DH. Returns the same 64-byte shared secret Alice
+/// derives from `process_pre_key_bundle`.
+///
+/// Pass an empty `BitArray` for `one_time_pre_key_priv` when no OPK is
+/// being used.
+pub fn process_pre_key_bundle_bob(
+  identity_priv: BitArray,
+  signed_pre_key_priv: BitArray,
+  one_time_pre_key_priv: BitArray,
+  remote_identity_pub: BitArray,
+  remote_ephemeral_pub: BitArray,
+) -> Result(BitArray, String) {
+  call_nif_process_pre_key_bundle_bob(
+    identity_priv,
+    signed_pre_key_priv,
+    one_time_pre_key_priv,
+    remote_identity_pub,
+    remote_ephemeral_pub,
+  )
+}
+
+/// Encrypt Alice's first message and wrap it in a PreKeySignalMessage so
+/// Bob can recover the X3DH shared secret before decrypting.
+pub fn dr_encrypt_prekey(
+  session: DrSession,
+  message: BitArray,
+  info: PreKeyInfo,
+) -> Result(#(BitArray, DrSession), String) {
+  let DrSession(state) = session
+  let PreKeyInfo(reg_id, opk_id, spk_id, eph_pub) = info
+  call_nif_dr_encrypt_prekey(
+    state,
+    message,
+    #(reg_id, opk_id, spk_id, eph_pub),
+  )
+  |> result.map(fn(pair) {
+    let #(wire, next) = pair
+    #(wire, DrSession(next))
+  })
+}
+
+/// Decode a PreKeySignalMessage wire envelope.
+pub fn pksm_decode(wire: BitArray) -> Result(PksmMessage, String) {
+  call_nif_pksm_decode(wire)
+  |> result.map(fn(t) {
+    let #(reg, base, id, opk, spk, msg) = t
+    PksmMessage(reg, base, id, opk, spk, msg)
   })
 }

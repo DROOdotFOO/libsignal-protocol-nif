@@ -7,11 +7,14 @@
     generate_signed_pre_key/2,
     create_session/2,
     process_pre_key_bundle/2,
+    process_pre_key_bundle_bob/5,
     encrypt_message/2,
     decrypt_message/2,
     dr_init/5,
     dr_encrypt/2,
+    dr_encrypt_prekey/3,
     dr_decrypt/2,
+    pksm_decode/1,
     % Double Ratchet aliases
     init_double_ratchet/5,
     dr_encrypt_message/2,
@@ -63,6 +66,19 @@ create_session(_LocalKey, _RemoteKey) ->
 process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
     erlang:nif_error(nif_not_loaded).
 
+%% Bob-side X3DH. Inputs are Bob's private material plus the two pubs Alice
+%% sends with her first message (her identity pub and her ephemeral pub).
+%% IdentityPriv: 64B Ed25519 secret (Bob's identity).
+%% SignedPreKeyPriv: 32B X25519 secret (the SPK Alice consumed from his bundle).
+%% OneTimePreKeyPriv: 32B X25519 secret or <<>> if no OPK was used.
+%% RemoteIdentityPub: 32B Ed25519 (Alice's identity pub).
+%% RemoteEphemeralPub: 32B X25519 (Alice's ephemeral, returned by her
+%%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 64B
+%%   SK Alice derived.
+process_pre_key_bundle_bob(_IdentityPriv, _SignedPreKeyPriv, _OneTimePreKeyPriv,
+                           _RemoteIdentityPub, _RemoteEphemeralPub) ->
+    erlang:nif_error(nif_not_loaded).
+
 encrypt_message(_Session, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -70,14 +86,18 @@ decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet functions.
-% LocalIdentityPub and RemoteIdentityPub are Ed25519 identity public keys for
-% both ends. Both are stored in DR state and folded into every MAC (Signal-spec
-% scope: sender_id || receiver_id || version || serialized_message).
+% LocalIdentityPub and RemoteIdentityPub are Ed25519 identity public keys
+% (32B each). At init they are converted to X25519 form via
+% crypto_sign_ed25519_pk_to_curve25519 and the X25519 form is what gets folded
+% into every MAC -- Signal-spec scope:
+%   sender_x25519_id || receiver_x25519_id || version || serialized_message
+% Callers pass Ed25519 form to keep the public API aligned with how we hand out
+% identity keys elsewhere (generate_identity_key_pair returns Ed25519).
 % For Alice: SelfIdentityPriv may be <<>> (she uses a fresh ephemeral for DH);
-%   RemoteIdentityPub is Bob's identity public key.
-% For Bob:   SelfIdentityPriv is his 64B Ed25519 identity private key, used as
-%   the initial DH ratchet pair. Bob's encrypt fails until he receives Alice's
-%   first message.
+%   RemoteIdentityPub is Bob's Ed25519 identity public key.
+% For Bob:   SelfIdentityPriv is his 64B Ed25519 identity private key,
+%   converted to X25519 internally for the initial DH ratchet pair. Bob's
+%   encrypt fails until he receives Alice's first message.
 dr_init(_SharedSecret, _LocalIdentityPub, _RemoteIdentityPub,
         _SelfIdentityPriv, _IsAlice) ->
     erlang:nif_error(nif_not_loaded).
@@ -85,7 +105,26 @@ dr_init(_SharedSecret, _LocalIdentityPub, _RemoteIdentityPub,
 dr_encrypt(_DrSession, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
+%% Encrypt Alice's first message and wrap it in a PreKeySignalMessage envelope
+%% so Bob can recover the X3DH SK before decrypting the inner SignalMessage.
+%% PreKeyInfo = {RegistrationId, OneTimePreKeyId | undefined, SignedPreKeyId,
+%%               AliceX3dhEphemeralPub}. AliceX3dhEphemeralPub is the 32B X25519
+%% pub returned by process_pre_key_bundle/2.
+%% Returns {ok, {PksmWireBytes, NewSession}} | {error, Atom}.
+dr_encrypt_prekey(_DrSession, _Message, _PreKeyInfo) ->
+    erlang:nif_error(nif_not_loaded).
+
 dr_decrypt(_DrSession, _EncryptedMessage) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% Decode a PreKeySignalMessage wire envelope. Pure parse -- Bob's side then
+%% looks up his SPK/OPK by id, runs process_pre_key_bundle_bob/5 to derive SK,
+%% calls init_double_ratchet/5, and decrypts the InnerMessage with dr_decrypt/2.
+%% Returns
+%%   {ok, {RegistrationId, BaseKey, IdentityKey, OneTimePreKeyId | undefined,
+%%         SignedPreKeyId, InnerMessage}}
+%% | {error, malformed_message}.
+pksm_decode(_Wire) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet aliases for better API

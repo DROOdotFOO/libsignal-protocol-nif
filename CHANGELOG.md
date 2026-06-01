@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PreKeySignalMessage envelope (Signal interop)** — Alice's first message can now be wrapped in a Signal-spec `PreKeySignalMessage` protobuf so the receiver can identify which of their stored pre-keys to consume and recover the X3DH secret without out-of-band coordination:
+  - Wire shape: `version_byte(0x33) || protobuf{ registration_id=1, base_key=2, identity_key=3, pre_key_id=4 (optional), signed_pre_key_id=5, message=6 }` where `message` carries the full inner `SignalMessage` (version + protobuf + MAC).
+  - `identity_key` is sent in **X25519 (DJB) form** — Alice's Ed25519 identity pub converted via `crypto_sign_ed25519_pk_to_curve25519`. The DR MAC scope already uses X25519 identity pubs (converted internally at `dr_init`), so this is wire-spec compatible with libsignal.
+  - New NIF entry points: `dr_encrypt_prekey/3` (encode side, takes `{RegistrationId, OneTimePreKeyIdOrUndefined, SignedPreKeyId, AliceX3dhEphemeralPub}`) and `pksm_decode/1` (pure decode; returns 6-tuple with `undefined` for an absent OPK id).
+  - `process_pre_key_bundle_bob/5` — Bob's side of X3DH, returns the same 64B SK Alice derived. Inputs: Bob's identity priv (Ed25519, 64B), SPK priv (X25519, 32B), OPK priv (X25519, 32B or `<<>>`), Alice's identity pub (Ed25519, 32B), Alice's ephemeral pub (X25519, 32B).
+  - New `pksm_SUITE` (5 tests) covers the full Alice → Bob handshake with and without OPK, plus malformed and truncated wire inputs and a direct Bob-side X3DH cross-check against Alice's NIF output.
+  - Elixir + Gleam wrappers expose all three new functions. The Gleam wrapper adds a `libsignal_protocol_gleam_ffi` adapter module that translates Gleam's `Option(Int)` encoding to the NIF's idiomatic `Int | undefined` for the optional pre-key id field.
 - New `x3dh_dr_compose_SUITE` (4 tests, including a 10-trial property) verifies that `process_pre_key_bundle`'s 64-byte output is a valid `init_double_ratchet` shared secret, that Alice + Bob exchange messages end-to-end through the full X3DH → DR flow, and (new with the raw-X25519 switch) that an Erlang-side reconstruction of Bob's X3DH derives the same shared secret as Alice.
 - `signal_nif:ed25519_sk_to_curve25519/1` and `ed25519_pk_to_curve25519/1` — exposed for Erlang-side Bob-side X3DH reconstruction. Wrap `crypto_sign_ed25519_{sk,pk}_to_curve25519`.
 - Both wrappers now expose the Double Ratchet API:

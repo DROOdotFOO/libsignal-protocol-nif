@@ -10,6 +10,7 @@
 #include <openssl/hmac.h>
 #include <openssl/crypto.h>
 #include "dr.h"
+#include "pksm.h"
 
 // Signal Protocol wire version. Encoded as (v << 4) | v in the leading byte.
 #define DR_SIGNAL_VERSION 3
@@ -629,6 +630,129 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), dr_session_term);
 }
 
+// Cipher + MAC + envelope. On success returns NULL, *out_wire is an
+// enif_alloc'd buffer of *out_wire_len bytes (caller frees with enif_free),
+// and *state is advanced in place. On failure returns a static error-name
+// string and zeroizes any sensitive locals; state is left unmodified.
+static const char *dr_encrypt_core(double_ratchet_state_t *state,
+                                   const unsigned char *pt, size_t pt_len,
+                                   unsigned char **out_wire, size_t *out_wire_len)
+{
+    if (!state->initialized) return "session_not_initialized";
+    // Bob cannot send before receiving Alice's first message -- his
+    // send_chain_key is only derived during the receive ratchet.
+    if (!state->dh_recv_initialized) return "must_receive_first";
+
+    // Derive per-message keys: cipher_key(32) || mac_key(32) || iv(16)
+    // from messageKey via HKDF (info="WhisperMessageKeys", Signal spec).
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+    derive_message_key(message_key, state->send_chain_key);
+    unsigned char next_chain[DR_CHAIN_KEY_SIZE];
+    advance_chain_key(next_chain, state->send_chain_key);
+
+    unsigned char cipher_key[32], mac_key[32], iv[16];
+    if (dr_derive_message_keys(cipher_key, mac_key, iv, message_key) != 0) {
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        return "kdf_failed";
+    }
+
+    // AES-256-CBC + PKCS#7 encrypt. Output is always plaintext_len + 1..16.
+    size_t cbc_buf_cap = pt_len + 16;
+    unsigned char *cbc_buf = enif_alloc(cbc_buf_cap);
+    if (!cbc_buf) {
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        sodium_memzero(cipher_key, sizeof(cipher_key));
+        sodium_memzero(mac_key, sizeof(mac_key));
+        sodium_memzero(iv, sizeof(iv));
+        return "memory_allocation_failed";
+    }
+    size_t cbc_len = 0;
+    if (dr_aes_cbc_encrypt(cbc_buf, &cbc_len, pt, pt_len, cipher_key, iv) != 0) {
+        enif_free(cbc_buf);
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        sodium_memzero(cipher_key, sizeof(cipher_key));
+        sodium_memzero(mac_key, sizeof(mac_key));
+        sodium_memzero(iv, sizeof(iv));
+        return "encryption_failed";
+    }
+
+    // Serialize the DrMessage protobuf. Header (fields 1-3) + ciphertext
+    // (field 4). Max size: 46 (header) + 1 (tag) + 10 (varint) + cbc_len.
+    unsigned char header[64];
+    size_t header_len = dr_serialize_header(header, state->dh_send_public, 32,
+                                            state->send_message_number,
+                                            state->prev_send_length);
+    unsigned char ct_len_varint[10];
+    size_t ct_len_varint_len = pb_encode_varint(ct_len_varint, cbc_len);
+    size_t proto_len = header_len + 1 + ct_len_varint_len + cbc_len;
+
+    unsigned char *proto = enif_alloc(proto_len);
+    if (!proto) {
+        enif_free(cbc_buf);
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        sodium_memzero(cipher_key, sizeof(cipher_key));
+        sodium_memzero(mac_key, sizeof(mac_key));
+        sodium_memzero(iv, sizeof(iv));
+        return "memory_allocation_failed";
+    }
+    memcpy(proto, header, header_len);
+    size_t p = header_len;
+    proto[p++] = 0x22;  // (4 << 3) | 2: field 4, length-delimited (ciphertext)
+    memcpy(proto + p, ct_len_varint, ct_len_varint_len);
+    p += ct_len_varint_len;
+    memcpy(proto + p, cbc_buf, cbc_len);
+    enif_free(cbc_buf);
+
+    // MAC over local_id_pub || remote_id_pub || version || protobuf.
+    unsigned char mac[DR_MAC_LEN];
+    if (dr_compute_mac(mac, mac_key,
+                       state->local_identity_pub, state->remote_identity_pub,
+                       DR_VERSION_BYTE, proto, proto_len) != 0) {
+        enif_free(proto);
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        sodium_memzero(cipher_key, sizeof(cipher_key));
+        sodium_memzero(mac_key, sizeof(mac_key));
+        sodium_memzero(iv, sizeof(iv));
+        return "mac_failed";
+    }
+
+    // Assemble the wire envelope: version(1) || protobuf || mac(8).
+    size_t wire_len = 1 + proto_len + DR_MAC_LEN;
+    unsigned char *wire = enif_alloc(wire_len);
+    if (!wire) {
+        enif_free(proto);
+        sodium_memzero(message_key, sizeof(message_key));
+        sodium_memzero(next_chain, sizeof(next_chain));
+        sodium_memzero(cipher_key, sizeof(cipher_key));
+        sodium_memzero(mac_key, sizeof(mac_key));
+        sodium_memzero(iv, sizeof(iv));
+        return "memory_allocation_failed";
+    }
+    wire[0] = DR_VERSION_BYTE;
+    memcpy(wire + 1, proto, proto_len);
+    memcpy(wire + 1 + proto_len, mac, DR_MAC_LEN);
+    enif_free(proto);
+
+    // Advance state.
+    memcpy(state->send_chain_key, next_chain, DR_CHAIN_KEY_SIZE);
+    state->send_message_number++;
+
+    sodium_memzero(message_key, sizeof(message_key));
+    sodium_memzero(next_chain, sizeof(next_chain));
+    sodium_memzero(cipher_key, sizeof(cipher_key));
+    sodium_memzero(mac_key, sizeof(mac_key));
+    sodium_memzero(iv, sizeof(iv));
+
+    *out_wire = wire;
+    *out_wire_len = wire_len;
+    return NULL;
+}
+
 // Double Ratchet: Encrypt message.
 ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -643,137 +767,154 @@ ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    // Validate session size
     if (dr_session.size != DR_STATE_SIZE) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_session_size"));
     }
 
-    // Copy state from binary
     double_ratchet_state_t state;
     memcpy(&state, dr_session.data, DR_STATE_SIZE);
 
-    if (!state.initialized) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "session_not_initialized"));
-    }
-
-    // Bob cannot send before receiving Alice's first message -- his
-    // send_chain_key is only derived during the receive ratchet.
-    if (!state.dh_recv_initialized) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "must_receive_first"));
-    }
-
-    // Derive per-message keys: cipher_key(32) || mac_key(32) || iv(16)
-    // from messageKey via HKDF (info="WhisperMessageKeys", Signal spec).
-    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
-    derive_message_key(message_key, state.send_chain_key);
-    advance_chain_key(state.send_chain_key, state.send_chain_key);
-
-    unsigned char cipher_key[32], mac_key[32], iv[16];
-    if (dr_derive_message_keys(cipher_key, mac_key, iv, message_key) != 0) {
-        sodium_memzero(message_key, sizeof(message_key));
+    unsigned char *wire = NULL;
+    size_t wire_len = 0;
+    const char *err = dr_encrypt_core(&state, plaintext.data, plaintext.size,
+                                      &wire, &wire_len);
+    if (err) {
         sodium_memzero(&state, sizeof(state));
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "kdf_failed"));
+                               enif_make_atom(env, err));
     }
 
-    // AES-256-CBC + PKCS#7 encrypt. Output is always plaintext_len + 1..16.
-    size_t cbc_buf_cap = plaintext.size + 16;
-    unsigned char *cbc_buf = enif_alloc(cbc_buf_cap);
-    if (!cbc_buf) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "memory_allocation_failed"));
-    }
-    size_t cbc_len = 0;
-    if (dr_aes_cbc_encrypt(cbc_buf, &cbc_len,
-                           plaintext.data, plaintext.size,
-                           cipher_key, iv) != 0) {
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "encryption_failed"));
-    }
-
-    // Serialize the DrMessage protobuf. Header (fields 1-3) + ciphertext
-    // (field 4). Max size: 46 (header) + 1 (tag) + 10 (varint) + cbc_len.
-    unsigned char header[64];
-    size_t header_len = dr_serialize_header(header, state.dh_send_public, 32,
-                                            state.send_message_number,
-                                            state.prev_send_length);
-    unsigned char ct_len_varint[10];
-    size_t ct_len_varint_len = pb_encode_varint(ct_len_varint, cbc_len);
-    size_t proto_len = header_len + 1 + ct_len_varint_len + cbc_len;
-
-    unsigned char *proto = enif_alloc(proto_len);
-    if (!proto) {
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "memory_allocation_failed"));
-    }
-    memcpy(proto, header, header_len);
-    size_t p = header_len;
-    proto[p++] = 0x22;  // (4 << 3) | 2: field 4, length-delimited (ciphertext)
-    memcpy(proto + p, ct_len_varint, ct_len_varint_len);
-    p += ct_len_varint_len;
-    memcpy(proto + p, cbc_buf, cbc_len);
-    enif_free(cbc_buf);
-
-    // MAC over local_id_pub || remote_id_pub || version || protobuf.
-    unsigned char mac[DR_MAC_LEN];
-    if (dr_compute_mac(mac, mac_key,
-                       state.local_identity_pub, state.remote_identity_pub,
-                       DR_VERSION_BYTE, proto, proto_len) != 0) {
-        enif_free(proto);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "mac_failed"));
-    }
-
-    // Assemble the wire envelope: version(1) || protobuf || mac(8).
-    size_t wire_len = 1 + proto_len + DR_MAC_LEN;
     ERL_NIF_TERM encrypted_term;
     unsigned char *encrypted_data = enif_make_new_binary(env, wire_len, &encrypted_term);
-    encrypted_data[0] = DR_VERSION_BYTE;
-    memcpy(encrypted_data + 1, proto, proto_len);
-    memcpy(encrypted_data + 1 + proto_len, mac, DR_MAC_LEN);
-    enif_free(proto);
-
-    // Advance state and emit.
-    state.send_message_number++;
+    memcpy(encrypted_data, wire, wire_len);
+    enif_free(wire);
 
     ERL_NIF_TERM updated_session_term;
     unsigned char *updated_session_data =
         enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
     memcpy(updated_session_data, &state, DR_STATE_SIZE);
-
-    sodium_memzero(message_key, sizeof(message_key));
-    sodium_memzero(cipher_key, sizeof(cipher_key));
-    sodium_memzero(mac_key, sizeof(mac_key));
-    sodium_memzero(iv, sizeof(iv));
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
                            enif_make_tuple2(env, encrypted_term, updated_session_term));
+}
+
+// Double Ratchet: Encrypt Alice's first message and wrap it in a
+// PreKeySignalMessage so Bob can derive the X3DH SK before decrypting.
+// argv[0] = DR session binary
+// argv[1] = plaintext binary
+// argv[2] = {RegistrationId :: uint, OneTimePreKeyIdOrUndefined,
+//            SignedPreKeyId :: uint, BaseKey :: 32B binary}
+//   where BaseKey is Alice's X3DH ephemeral pub returned by
+//   process_pre_key_bundle/2.
+// Returns {ok, {PksmWire, NewSession}} | {error, Atom}.
+ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    if (argc != 3) {
+        return enif_make_badarg(env);
+    }
+
+    ErlNifBinary dr_session, plaintext;
+    if (!enif_inspect_binary(env, argv[0], &dr_session) ||
+        !enif_inspect_binary(env, argv[1], &plaintext)) {
+        return enif_make_badarg(env);
+    }
+
+    const ERL_NIF_TERM *info_tup;
+    int info_arity = 0;
+    if (!enif_get_tuple(env, argv[2], &info_arity, &info_tup) || info_arity != 4) {
+        return enif_make_badarg(env);
+    }
+
+    unsigned int registration_id = 0;
+    unsigned int signed_pre_key_id = 0;
+    if (!enif_get_uint(env, info_tup[0], &registration_id) ||
+        !enif_get_uint(env, info_tup[2], &signed_pre_key_id)) {
+        return enif_make_badarg(env);
+    }
+
+    unsigned int pre_key_id = 0;
+    int has_pre_key_id = 0;
+    if (enif_is_atom(env, info_tup[1])) {
+        char atom_buf[16];
+        if (enif_get_atom(env, info_tup[1], atom_buf, sizeof(atom_buf),
+                          ERL_NIF_LATIN1) <= 0 ||
+            strcmp(atom_buf, "undefined") != 0) {
+            return enif_make_badarg(env);
+        }
+    } else if (enif_get_uint(env, info_tup[1], &pre_key_id)) {
+        has_pre_key_id = 1;
+    } else {
+        return enif_make_badarg(env);
+    }
+
+    ErlNifBinary base_key;
+    if (!enif_inspect_binary(env, info_tup[3], &base_key) ||
+        base_key.size != crypto_box_PUBLICKEYBYTES) {
+        return enif_make_badarg(env);
+    }
+
+    if (dr_session.size != DR_STATE_SIZE) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "invalid_session_size"));
+    }
+
+    double_ratchet_state_t state;
+    memcpy(&state, dr_session.data, DR_STATE_SIZE);
+
+    unsigned char *inner_wire = NULL;
+    size_t inner_wire_len = 0;
+    const char *err = dr_encrypt_core(&state, plaintext.data, plaintext.size,
+                                      &inner_wire, &inner_wire_len);
+    if (err) {
+        sodium_memzero(&state, sizeof(state));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
+
+    // PKSM body: registration_id, base_key(32), identity_key(32), optional
+    // pre_key_id, signed_pre_key_id, inner_message. Worst-case overhead is
+    // 6 tags + 6 varints + the two 32B keys = ~80B + inner.
+    size_t pksm_cap = 80 + inner_wire_len;
+    unsigned char *pksm_buf = enif_alloc(pksm_cap);
+    if (!pksm_buf) {
+        enif_free(inner_wire);
+        sodium_memzero(&state, sizeof(state));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "memory_allocation_failed"));
+    }
+
+    int pksm_len = pksm_encode(pksm_buf, pksm_cap,
+                               registration_id,
+                               base_key.data, base_key.size,
+                               state.local_identity_pub, crypto_box_PUBLICKEYBYTES,
+                               pre_key_id, has_pre_key_id,
+                               signed_pre_key_id,
+                               inner_wire, inner_wire_len);
+    enif_free(inner_wire);
+    if (pksm_len < 0) {
+        enif_free(pksm_buf);
+        sodium_memzero(&state, sizeof(state));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, "pksm_encode_failed"));
+    }
+
+    size_t wire_len = 1 + (size_t)pksm_len;
+    ERL_NIF_TERM wire_term;
+    unsigned char *wire_data = enif_make_new_binary(env, wire_len, &wire_term);
+    wire_data[0] = DR_VERSION_BYTE;
+    memcpy(wire_data + 1, pksm_buf, (size_t)pksm_len);
+    enif_free(pksm_buf);
+
+    ERL_NIF_TERM updated_session_term;
+    unsigned char *updated_session_data =
+        enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
+    memcpy(updated_session_data, &state, DR_STATE_SIZE);
+    sodium_memzero(&state, sizeof(state));
+
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"),
+                           enif_make_tuple2(env, wire_term, updated_session_term));
 }
 
 // Double Ratchet: Decrypt message.

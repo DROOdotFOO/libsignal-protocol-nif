@@ -61,6 +61,7 @@ add_library(libsignal_protocol_nif SHARED
     libsignal_protocol_nif.c
     dr.c
     keys.c
+    pksm.c
     session.c
 )
 

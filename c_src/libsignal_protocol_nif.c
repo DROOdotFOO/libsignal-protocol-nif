@@ -4,6 +4,7 @@
 
 #include "dr.h"
 #include "keys.h"
+#include "pksm.h"
 #include "session.h"
 
 static ERL_NIF_TERM init_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -18,11 +19,14 @@ static ErlNifFunc nif_funcs[] = {
     {"generate_signed_pre_key", 2, generate_signed_pre_key, 0},
     {"create_session", 2, create_session_2, 0},
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
+    {"process_pre_key_bundle_bob", 5, process_pre_key_bundle_bob, 0},
     {"encrypt_message", 2, encrypt_message, 0},
     {"decrypt_message", 2, decrypt_message, 0},
     {"dr_init", 5, dr_init, 0},
     {"dr_encrypt", 2, dr_encrypt, 0},
-    {"dr_decrypt", 2, dr_decrypt, 0}
+    {"dr_encrypt_prekey", 3, dr_encrypt_prekey, 0},
+    {"dr_decrypt", 2, dr_decrypt, 0},
+    {"pksm_decode", 1, pksm_decode_nif, 0}
 };
 
 static int on_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
