@@ -15,11 +15,6 @@ defmodule LibsignalProtocol do
     @nif.init() |> normalize()
   end
 
-  @spec create_session(binary()) :: {:ok, binary()} | {:error, String.t()}
-  def create_session(public_key) when is_binary(public_key) do
-    @nif.create_session(public_key) |> normalize()
-  end
-
   @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, String.t()}
   def create_session(local_private_key, remote_public_key)
       when is_binary(local_private_key) and is_binary(remote_public_key) do
