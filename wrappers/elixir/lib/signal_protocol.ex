@@ -22,25 +22,23 @@ defmodule SignalProtocol do
     @nif.generate_signed_pre_key(identity_key, key_id)
   end
 
-  @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, term()}
-  def create_session(local_identity_key, remote_identity_key)
-      when is_binary(local_identity_key) and is_binary(remote_identity_key) do
-    @nif.create_session(local_identity_key, remote_identity_key)
-  end
+  @doc """
+  Performs X3DH key agreement against a remote pre-key bundle.
 
-  @spec process_pre_key_bundle(reference(), binary()) :: :ok | {:error, term()}
-  def process_pre_key_bundle(session, bundle) when is_reference(session) and is_binary(bundle) do
-    @nif.process_pre_key_bundle(session, bundle)
-  end
+  The bundle is a binary in the format expected by the C NIF:
+  `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(32)`
+  with an optional trailing `one_time_prekey(32)`. The signature is
+  `HMAC-SHA256(signed_prekey_pub, key=remote_identity_pub)`.
 
-  @spec encrypt_message(reference(), binary()) :: {:ok, binary()} | {:error, term()}
-  def encrypt_message(session, message) when is_reference(session) and is_binary(message) do
-    @nif.encrypt_message(session, message)
-  end
-
-  @spec decrypt_message(reference(), binary()) :: {:ok, binary()} | {:error, term()}
-  def decrypt_message(session, ciphertext) when is_reference(session) and is_binary(ciphertext) do
-    @nif.decrypt_message(session, ciphertext)
+  Returns `{:ok, {shared_secret(64), ephemeral_pub(32)}}` on success. The
+  shared secret is suitable to feed into `init_double_ratchet/4` as the
+  Double Ratchet root seed.
+  """
+  @spec process_pre_key_bundle(binary(), binary()) ::
+          {:ok, {binary(), binary()}} | {:error, term()}
+  def process_pre_key_bundle(local_identity_priv, bundle)
+      when is_binary(local_identity_priv) and is_binary(bundle) do
+    @nif.process_pre_key_bundle(local_identity_priv, bundle)
   end
 
   # ============================================================================

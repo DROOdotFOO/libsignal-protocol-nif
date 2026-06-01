@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Both wrappers now expose the Double Ratchet API:
+  - Elixir: `SignalProtocol.init_double_ratchet/4`, `dr_encrypt_message/2`, `dr_decrypt_message/2`.
+  - Gleam: `signal_protocol.init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`, plus `DrSession` and `DrRole` types.
+- Both wrappers now expose `process_pre_key_bundle` as the X3DH step that produces a 64-byte shared secret for `init_double_ratchet`. Elixir signature: `process_pre_key_bundle(local_identity_priv, bundle) :: {:ok, {shared_secret, ephemeral_pub}}`. Gleam takes a `PreKeyBundle` record and handles the C bundle format internally.
+
+### Changed
+
+- **Breaking**: removed `SignalProtocol.create_session/2`, `encrypt_message/2`, `decrypt_message/2` from the Elixir wrapper. They had `is_reference(session)` guards that never matched the binary the NIF returns -- all three were unreachable. The NIF still exports them for direct Erlang callers; the proper Signal flow is `process_pre_key_bundle` → `init_double_ratchet` → `dr_encrypt_message`.
+- **Breaking**: removed `signal_protocol.{create_session,create_session_with_keys,encrypt_message,decrypt_message,create_and_process_bundle,send_message,receive_message}` plus the `Session` type from the Gleam wrapper. Same rationale: the legacy chain was a misnomer wrapping a static-key AEAD primitive, not a Signal Protocol session. The DR API replaces it.
+
+### Removed
+
+- `wrappers/gleam/src/session.gleam` and `wrappers/gleam/test/session_test.gleam` — every function passed a session ref where the C NIF expects a 32-byte identity private key. Mismatch was structural, not fixable without an API rewrite.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added

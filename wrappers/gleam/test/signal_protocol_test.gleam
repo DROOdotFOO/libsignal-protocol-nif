@@ -45,42 +45,6 @@ pub fn generate_signed_pre_key_test() {
   }
 }
 
-pub fn create_session_test() {
-  case signal_protocol.generate_identity_key_pair() {
-    Ok(identity_key_pair) -> {
-      case signal_protocol.create_session(identity_key_pair.public_key) {
-        Ok(session) -> {
-          should.equal(bit_array.byte_size(session.reference) > 0, True)
-        }
-        Error(_e) -> should.fail()
-      }
-    }
-    Error(_e) -> should.fail()
-  }
-}
-
-pub fn encrypt_message_test() {
-  case signal_protocol.generate_identity_key_pair() {
-    Ok(identity_key_pair) -> {
-      case signal_protocol.create_session(identity_key_pair.public_key) {
-        Ok(session) -> {
-          let message = <<"Hello, Signal Protocol!":utf8>>
-          case signal_protocol.encrypt_message(session, message) {
-            Ok(ciphertext) -> {
-              should.equal(bit_array.byte_size(ciphertext) > 0, True)
-              // Note: We can't decrypt with the current simplified implementation
-              // This is expected for the basic test
-            }
-            Error(_e) -> should.fail()
-          }
-        }
-        Error(_e) -> should.fail()
-      }
-    }
-    Error(_e) -> should.fail()
-  }
-}
-
 pub fn basic_functionality_test() {
   // Test that we can at least generate keys without errors
   case signal_protocol.generate_identity_key_pair() {

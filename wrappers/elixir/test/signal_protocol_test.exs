@@ -25,13 +25,20 @@ defmodule SignalProtocolTest do
     assert byte_size(signature) == 32
   end
 
-  test "create_session returns a non-empty binary session id" do
-    {:ok, {local, _}} = SignalProtocol.generate_identity_key_pair()
-    {:ok, {remote, _}} = SignalProtocol.generate_identity_key_pair()
+  test "process_pre_key_bundle performs X3DH and returns {shared_secret, ephemeral_pub}" do
+    {:ok, {_local_pub, local_priv}} = :signal_nif.generate_curve25519_keypair()
+    {:ok, {remote_identity_pub, _}} = :signal_nif.generate_curve25519_keypair()
+    {:ok, {signed_prekey_pub, _}} = :signal_nif.generate_curve25519_keypair()
+    # C uses libsodium's crypto_auth, which is HMAC-SHA512-256 (NOT SHA-256).
+    signature =
+      :crypto.mac(:hmac, :sha512, remote_identity_pub, signed_prekey_pub)
+      |> binary_part(0, 32)
+    bundle = remote_identity_pub <> signed_prekey_pub <> signature
 
-    assert {:ok, session} = SignalProtocol.create_session(local, remote)
-    assert is_binary(session)
-    assert byte_size(session) > 0
+    assert {:ok, {shared_secret, ephemeral_pub}} =
+             SignalProtocol.process_pre_key_bundle(local_priv, bundle)
+    assert byte_size(shared_secret) == 64
+    assert byte_size(ephemeral_pub) == 32
   end
 
   describe "Double Ratchet" do
