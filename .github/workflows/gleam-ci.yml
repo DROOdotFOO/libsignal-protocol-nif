@@ -1,94 +1,56 @@
 name: Gleam Wrapper CI
 
-# Disabled for now - only manual trigger
 on:
-  workflow_dispatch:
-    inputs:
-      enable_gleam_tests:
-        description: 'Enable Gleam wrapper tests'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-        - 'true'
-        - 'false'
-
-env:
-  CARGO_TERM_COLOR: always
-  MIX_ENV: test
+  push:
+    branches: [main, develop]
+    paths:
+      - 'wrappers/gleam/**'
+      - 'c_src/**'
+      - 'erl_src/**'
+      - '.github/workflows/gleam-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'wrappers/gleam/**'
+      - 'c_src/**'
+      - 'erl_src/**'
+      - '.github/workflows/gleam-ci.yml'
 
 jobs:
   test-gleam-wrapper:
     name: Test Gleam wrapper
     runs-on: ubuntu-latest
-    # Only run if manually enabled
-    if: github.event.inputs.enable_gleam_tests == 'true'
-    
+
     steps:
-    - uses: actions/checkout@v4.1.1
-    
-    - name: Setup Erlang/OTP and Elixir
-      uses: erlef/setup-beam@v1.18.0
+    - uses: actions/checkout@v5
+
+    - name: Setup Erlang/OTP
+      uses: erlef/setup-beam@v1.24.0
       with:
         otp-version: '26.2'
-        elixir-version: '1.15.7'
         rebar3-version: '3.22.1'
         install-hex: true
         install-rebar: true
-    
-    - name: Install Gleam
-      run: |
-        curl -sSL https://github.com/gleam-lang/gleam/releases/download/v1.11.0/gleam-v1.11.0-x86_64-unknown-linux-musl.tar.gz | tar -xz
-        sudo mv gleam /usr/local/bin/
-        gleam --version
-    
+        gleam-version: '1.16.0'
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libsodium-dev cmake build-essential pkg-config
-        # Verify installations
-        cmake --version
-        pkg-config --exists libsodium && echo "libsodium found" || echo "libsodium not found"
-    
+
     - name: Build main NIF
       run: |
-        echo "Building main NIF..."
-        # First compile Erlang components to ensure NIF is built
         rebar3 compile
-        # Then build C components
         cd c_src
         cmake . -DCMAKE_BUILD_TYPE=Release
         make
         cd ..
-        ls -la priv/
-        echo "NIF files built:"
-        find priv/ -name "*.so" -o -name "*.dll" -o -name "*.dylib" | head -10
-        echo "Erlang beam files:"
-        find _build/ -name "*.beam" | grep libsignal | head -10
-    
+
     - name: Test Gleam wrapper
       run: |
         cd wrappers/gleam
-        # Copy NIF files to wrapper priv directory
         mkdir -p priv
-        cp -f ../../priv/*.so priv/ 2>/dev/null || cp -f ../../priv/*.dylib priv/ 2>/dev/null || cp -f ../../priv/*.dll priv/ 2>/dev/null || echo "No NIF files found to copy"
-        ls -la priv/
-        echo "Downloading dependencies..."
+        cp -f ../../priv/*.so priv/
         gleam deps download
-        echo "Building..."
-        gleam build || {
-          echo "Build failed, checking for dependency issues..."
-          echo "Gleam version: $(gleam --version)"
-          echo "Dependencies:"
-          cat gleam.toml
-          echo "Retrying build..."
-          gleam build
-        }
-        echo "Running tests..."
-        gleam test || {
-          echo "Tests failed, checking for NIF loading issues..."
-          echo "Available NIF files:"
-          find ../../ -name "*.so" -o -name "*.dylib" -o -name "*.dll" | head -10
-          echo "Continuing with build verification..."
-          gleam check
-        } 
+        export ERL_LIBS="../../_build/default/lib:$ERL_LIBS"
+        gleam test

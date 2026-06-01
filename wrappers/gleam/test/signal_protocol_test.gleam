@@ -7,7 +7,7 @@ pub fn main() {
   gleeunit.main()
 }
 
-pub fn test_generate_identity_key_pair() {
+pub fn generate_identity_key_pair_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       should.equal(bit_array.byte_size(identity_key_pair.public_key) > 0, True)
@@ -17,7 +17,7 @@ pub fn test_generate_identity_key_pair() {
   }
 }
 
-pub fn test_generate_pre_key() {
+pub fn generate_pre_key_test() {
   case signal_protocol.generate_pre_key(1) {
     Ok(pre_key) -> {
       should.equal(pre_key.key_id, 1)
@@ -27,7 +27,7 @@ pub fn test_generate_pre_key() {
   }
 }
 
-pub fn test_generate_signed_pre_key() {
+pub fn generate_signed_pre_key_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       case
@@ -45,7 +45,7 @@ pub fn test_generate_signed_pre_key() {
   }
 }
 
-pub fn test_create_session() {
+pub fn create_session_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       case signal_protocol.create_session(identity_key_pair.public_key) {
@@ -59,7 +59,7 @@ pub fn test_create_session() {
   }
 }
 
-pub fn test_encrypt_message() {
+pub fn encrypt_message_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       case signal_protocol.create_session(identity_key_pair.public_key) {
@@ -81,7 +81,7 @@ pub fn test_encrypt_message() {
   }
 }
 
-pub fn test_basic_functionality() {
+pub fn basic_functionality_test() {
   // Test that we can at least generate keys without errors
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {

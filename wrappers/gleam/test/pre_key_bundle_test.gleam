@@ -7,7 +7,7 @@ pub fn main() {
   gleeunit.main()
 }
 
-pub fn test_create_bundle() {
+pub fn create_bundle_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(identity_key_pair) -> {
       case signal_protocol.generate_pre_key(1) {

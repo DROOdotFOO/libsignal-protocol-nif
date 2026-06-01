@@ -7,7 +7,7 @@ pub fn main() {
   gleeunit.main()
 }
 
-pub fn test_create_session() {
+pub fn create_session_test() {
   case signal_protocol.generate_identity_key_pair() {
     Ok(local_identity) -> {
       case signal_protocol.generate_identity_key_pair() {
