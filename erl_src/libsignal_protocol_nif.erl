@@ -14,11 +14,7 @@
     dr_encrypt/2,
     dr_encrypt_prekey/3,
     dr_decrypt/2,
-    pksm_decode/1,
-    % Double Ratchet aliases
-    init_double_ratchet/5,
-    dr_encrypt_message/2,
-    dr_decrypt_message/2
+    pksm_decode/1
 ]).
 
 -on_load(load_nif/0).
@@ -132,23 +128,11 @@ dr_decrypt(_DrSession, _EncryptedMessage) ->
 
 %% Decode a PreKeySignalMessage wire envelope. Pure parse -- Bob's side then
 %% looks up his SPK/OPK by id, runs process_pre_key_bundle_bob/5 to derive SK,
-%% calls init_double_ratchet/5, and decrypts the InnerMessage with dr_decrypt/2.
+%% calls dr_init/5, and decrypts the InnerMessage with dr_decrypt/2.
 %% Returns
 %%   {ok, {RegistrationId, BaseKey, IdentityKey, OneTimePreKeyId | undefined,
 %%         SignedPreKeyId, InnerMessage}}
 %% | {error, malformed_message}.
 pksm_decode(_Wire) ->
     erlang:nif_error(nif_not_loaded).
-
-% Double Ratchet aliases for better API
-init_double_ratchet(SharedSecret, LocalIdentityPub, RemoteIdentityPub,
-                    SelfIdentityPriv, IsAlice) ->
-    dr_init(SharedSecret, LocalIdentityPub, RemoteIdentityPub,
-            SelfIdentityPriv, IsAlice).
-
-dr_encrypt_message(DrSession, Message) ->
-    dr_encrypt(DrSession, Message).
-
-dr_decrypt_message(DrSession, EncryptedMessage) ->
-    dr_decrypt(DrSession, EncryptedMessage).
 
