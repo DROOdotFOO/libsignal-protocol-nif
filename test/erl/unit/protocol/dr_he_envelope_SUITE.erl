@@ -41,8 +41,8 @@ init_per_testcase(_Name, Config) ->
     {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(96),
-    {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     [{alice, Alice}, {bob, Bob} | Config].
 
 %% ============================================================================
@@ -57,8 +57,8 @@ init_per_testcase(_Name, Config) ->
 wire_hides_counter(Config) ->
     Alice0 = ?config(alice, Config),
     Plain = <<"identical">>,
-    {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt_message(Alice0, Plain),
-    {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt_message(Alice1, Plain),
+    {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice0, Plain),
+    {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt(Alice1, Plain),
     %% Same length (PKCS#7 padding for the body is identical), but the
     %% enc_header portion must differ.
     ?assertEqual(byte_size(CT0), byte_size(CT1)),
@@ -85,8 +85,8 @@ wire_hides_counter(Config) ->
 wire_hides_ratchet_key(Config) ->
     Alice0 = ?config(alice, Config),
     Plain = <<"hide ratchet key">>,
-    {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt_message(Alice0, Plain),
-    {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt_message(Alice1, Plain),
+    {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice0, Plain),
+    {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt(Alice1, Plain),
     Common = longest_common_substring(CT0, CT1),
     %% Pre-DR-HE the cleartext ratchet_key alone was a 32B common substring.
     %% With DR-HE the only structurally-invariant bytes between two
@@ -100,12 +100,12 @@ wire_hides_ratchet_key(Config) ->
 %% check and the message is rejected before any MAC computation runs.
 tampered_envelope_rejected(Config) ->
     {Alice0, Bob0} = parties(Config),
-    {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt_message(Alice0, <<"original">>),
+    {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt(Alice0, <<"original">>),
     %% Outer protobuf starts at byte 1. Field 1 tag is 0x0A at byte 1,
     %% then a varint length, then the enc_header bytes. Tamper at byte ~5
     %% which is inside enc_header.
     Tampered = flip_bit(CT, 5),
-    Result = libsignal_protocol_nif:dr_decrypt_message(Bob0, Tampered),
+    Result = libsignal_protocol_nif:dr_decrypt(Bob0, Tampered),
     ?assertMatch({error, _}, Result).
 
 %% A session belonging to an unrelated pair cannot decrypt: every candidate
@@ -118,11 +118,11 @@ wrong_session_cannot_decrypt(Config) ->
         libsignal_protocol_nif:generate_identity_key_pair(),
     OtherSS = rand:bytes(96),
     {ok, OtherBob} =
-        libsignal_protocol_nif:init_double_ratchet(
+        libsignal_protocol_nif:dr_init(
           OtherSS, OtherBobPub, OtherPub, OtherBobPriv, 0),
-    {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt_message(Alice, <<"oops">>),
+    {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt(Alice, <<"oops">>),
     ?assertEqual({error, bad_mac},
-                 libsignal_protocol_nif:dr_decrypt_message(OtherBob, CT)).
+                 libsignal_protocol_nif:dr_decrypt(OtherBob, CT)).
 
 %% Truncating the outer envelope past the MAC region triggers a structural
 %% reject before any cryptographic work happens.
@@ -131,7 +131,7 @@ malformed_outer_envelope_rejected(Config) ->
     %% Just the version byte + 8 zero MAC bytes -- no enc_header field.
     Bogus = <<16#33, 0:64>>,
     ?assertMatch({error, malformed_message},
-                 libsignal_protocol_nif:dr_decrypt_message(Bob, Bogus)).
+                 libsignal_protocol_nif:dr_decrypt(Bob, Bogus)).
 
 %% ============================================================================
 %% Helpers

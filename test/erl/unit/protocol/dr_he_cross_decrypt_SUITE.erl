@@ -62,8 +62,8 @@ roundtrip_random_plaintexts(_Config) ->
 run_roundtrip_trial(N) ->
     {Alice, Bob} = fresh_pair(),
     PT = random_plaintext(),
-    {ok, {CT, _Alice1}} = libsignal_protocol_nif:dr_encrypt_message(Alice, PT),
-    {ok, {Got, _Bob1}} = libsignal_protocol_nif:dr_decrypt_message(Bob, CT),
+    {ok, {CT, _Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice, PT),
+    {ok, {Got, _Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
     ?assertEqual({N, PT}, {N, Got}).
 
 %% Property: any K alternating sends (Alice->Bob, then Bob->Alice, ...)
@@ -82,12 +82,12 @@ run_pingpong_trial(N) ->
         lists:foldl(
           fun(Round, {A0, B0}) ->
               PtAB = random_plaintext(),
-              {ok, {CtAB, A1}} = libsignal_protocol_nif:dr_encrypt_message(A0, PtAB),
-              {ok, {RxAB, B1}} = libsignal_protocol_nif:dr_decrypt_message(B0, CtAB),
+              {ok, {CtAB, A1}} = libsignal_protocol_nif:dr_encrypt(A0, PtAB),
+              {ok, {RxAB, B1}} = libsignal_protocol_nif:dr_decrypt(B0, CtAB),
               ?assertEqual({N, Round, ab, PtAB}, {N, Round, ab, RxAB}),
               PtBA = random_plaintext(),
-              {ok, {CtBA, B2}} = libsignal_protocol_nif:dr_encrypt_message(B1, PtBA),
-              {ok, {RxBA, A2}} = libsignal_protocol_nif:dr_decrypt_message(A1, CtBA),
+              {ok, {CtBA, B2}} = libsignal_protocol_nif:dr_encrypt(B1, PtBA),
+              {ok, {RxBA, A2}} = libsignal_protocol_nif:dr_decrypt(A1, CtBA),
               ?assertEqual({N, Round, ba, PtBA}, {N, Round, ba, RxBA}),
               {A2, B2}
           end,
@@ -117,7 +117,7 @@ run_reorder_trial(N) ->
               PT = <<"trial-", (integer_to_binary(N))/binary,
                      "-msg-", (integer_to_binary(I))/binary,
                      "-", (rand:bytes(8))/binary>>,
-              {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt_message(AAcc, PT),
+              {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt(AAcc, PT),
               {ANext, [{PT, CT} | Acc]}
           end,
           {Alice0, []},
@@ -128,7 +128,7 @@ run_reorder_trial(N) ->
     lists:foldl(
       fun({Expected, CT}, BAcc) ->
           {ok, {Got, BNext}} =
-              libsignal_protocol_nif:dr_decrypt_message(BAcc, CT),
+              libsignal_protocol_nif:dr_decrypt(BAcc, CT),
           ?assertEqual({N, K, Expected}, {N, K, Got}),
           BNext
       end,
@@ -155,8 +155,8 @@ run_isolation_trial(N) ->
     BobBWarm = warm_up(AliceB, BobB, N),
     PT = random_plaintext(),
     {ok, {CT, _AliceA1}} =
-        libsignal_protocol_nif:dr_encrypt_message(AliceA, PT),
-    Result = libsignal_protocol_nif:dr_decrypt_message(BobBWarm, CT),
+        libsignal_protocol_nif:dr_encrypt(AliceA, PT),
+    Result = libsignal_protocol_nif:dr_decrypt(BobBWarm, CT),
     ?assertEqual({N, {error, bad_mac}}, {N, Result}).
 
 %% Run 0..R rounds of A->B then B->A within session B so Bob's HKr/NHKr
@@ -169,13 +169,13 @@ warm_up(AliceB, BobB, _N) ->
         lists:foldl(
           fun(_, {A0, B0}) ->
               {ok, {Ct1, A1}} =
-                  libsignal_protocol_nif:dr_encrypt_message(A0, <<"warm-ab">>),
+                  libsignal_protocol_nif:dr_encrypt(A0, <<"warm-ab">>),
               {ok, {_, B1}} =
-                  libsignal_protocol_nif:dr_decrypt_message(B0, Ct1),
+                  libsignal_protocol_nif:dr_decrypt(B0, Ct1),
               {ok, {Ct2, B2}} =
-                  libsignal_protocol_nif:dr_encrypt_message(B1, <<"warm-ba">>),
+                  libsignal_protocol_nif:dr_encrypt(B1, <<"warm-ba">>),
               {ok, {_, A2}} =
-                  libsignal_protocol_nif:dr_decrypt_message(A1, Ct2),
+                  libsignal_protocol_nif:dr_decrypt(A1, Ct2),
               {A2, B2}
           end,
           {AliceB, BobB},
@@ -197,9 +197,9 @@ fresh_pair() ->
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(96),
     {ok, Alice} =
-        libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
+        libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
     {ok, Bob} =
-        libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
+        libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     {Alice, Bob}.
 
 random_plaintext() ->

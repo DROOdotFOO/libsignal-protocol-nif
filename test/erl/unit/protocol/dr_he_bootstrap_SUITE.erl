@@ -46,30 +46,30 @@ rejects_64_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(64),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:init_double_ratchet(
+                 libsignal_protocol_nif:dr_init(
                    SS, AlicePub, BobPub, <<>>, 1)).
 
 rejects_95_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(95),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:init_double_ratchet(
+                 libsignal_protocol_nif:dr_init(
                    SS, AlicePub, BobPub, <<>>, 1)).
 
 rejects_zero_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:init_double_ratchet(
+                 libsignal_protocol_nif:dr_init(
                    <<>>, AlicePub, BobPub, <<>>, 1)).
 
 accepts_96_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, BobPriv} = fresh_identities(),
     SS = rand:bytes(96),
     ?assertMatch({ok, _},
-                 libsignal_protocol_nif:init_double_ratchet(
+                 libsignal_protocol_nif:dr_init(
                    SS, AlicePub, BobPub, <<>>, 1)),
     ?assertMatch({ok, _},
-                 libsignal_protocol_nif:init_double_ratchet(
+                 libsignal_protocol_nif:dr_init(
                    SS, BobPub, AlicePub, BobPriv, 0)).
 
 %% Pin the DR state binary size on this build target so unintended struct
@@ -81,7 +81,7 @@ dr_state_grows_for_header_keys(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(96),
     {ok, Alice} =
-        libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
+        libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
     ?assertEqual(2836, byte_size(Alice)).
 
 %% ============================================================================

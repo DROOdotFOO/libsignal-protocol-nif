@@ -1,7 +1,7 @@
 -module(x3dh_dr_compose_SUITE).
 
 %% Verifies that process_pre_key_bundle (X3DH from Alice's side) composes
-%% correctly with init_double_ratchet: the 96-byte secret Alice gets from
+%% correctly with dr_init: the 96-byte secret Alice gets from
 %% X3DH (64B SK || 32B shared header key for DR-HE) is a valid root seed
 %% for a Double Ratchet session, and Alice + Bob can exchange messages
 %% once both initialize DR with that secret.
@@ -102,16 +102,16 @@ dr_handshake_after_x3dh(_Config) ->
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
     {ok, Alice} =
-        libsignal_protocol_nif:init_double_ratchet(SS, AliceIdPub, BobIdPub, <<>>, 1),
+        libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
     {ok, Bob} =
-        libsignal_protocol_nif:init_double_ratchet(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
+        libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
     Msg = <<"x3dh then dr">>,
-    {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt_message(Alice, Msg),
-    {ok, {PT, Bob1}} = libsignal_protocol_nif:dr_decrypt_message(Bob, CT),
+    {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt(Alice, Msg),
+    {ok, {PT, Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
     ?assertEqual(Msg, PT),
     Reply = <<"reply">>,
-    {ok, {CT2, _}} = libsignal_protocol_nif:dr_encrypt_message(Bob1, Reply),
-    {ok, {PT2, _}} = libsignal_protocol_nif:dr_decrypt_message(Alice, CT2),
+    {ok, {CT2, _}} = libsignal_protocol_nif:dr_encrypt(Bob1, Reply),
+    {ok, {PT2, _}} = libsignal_protocol_nif:dr_decrypt(Alice, CT2),
     ?assertEqual(Reply, PT2).
 
 %% Reconstruct the X3DH shared secret from Bob's side and check it matches
@@ -148,10 +148,10 @@ run_trial() ->
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
     {ok, Alice} =
-        libsignal_protocol_nif:init_double_ratchet(SS, AliceIdPub, BobIdPub, <<>>, 1),
+        libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
     {ok, Bob} =
-        libsignal_protocol_nif:init_double_ratchet(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
+        libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
     Msg = <<"random trial ", (rand:bytes(8))/binary>>,
-    {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt_message(Alice, Msg),
-    {ok, {PT, _}} = libsignal_protocol_nif:dr_decrypt_message(Bob, CT),
+    {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt(Alice, Msg),
+    {ok, {PT, _}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
     ?assertEqual(Msg, PT).

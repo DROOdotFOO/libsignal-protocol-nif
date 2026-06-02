@@ -35,8 +35,8 @@ init_per_testcase(_Name, Config) ->
     {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(96),
-    {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     [{alice, Alice}, {bob, Bob} | Config].
 
 parties(Config) ->
@@ -48,7 +48,7 @@ alice_sends(Alice0, N) ->
     {AliceN, Rev} =
         lists:foldl(fun(I, {AAcc, Acc}) ->
                        Msg = <<"msg-", (integer_to_binary(I))/binary>>,
-                       {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt_message(AAcc, Msg),
+                       {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt(AAcc, Msg),
                        {ANext, [{Msg, CT} | Acc]}
                     end,
                     {Alice0, []},
@@ -57,7 +57,7 @@ alice_sends(Alice0, N) ->
 
 bob_receives(Bob0, Items) ->
     lists:foldl(fun({Expected, CT}, BAcc) ->
-                   {ok, {PT, BNext}} = libsignal_protocol_nif:dr_decrypt_message(BAcc, CT),
+                   {ok, {PT, BNext}} = libsignal_protocol_nif:dr_decrypt(BAcc, CT),
                    ?assertEqual(Expected, PT),
                    BNext
                 end,
@@ -92,17 +92,17 @@ reorder_across_dh_ratchet(Config) ->
     {Alice1, [A0, A1, A2]} = alice_sends(Alice0, 3),
     Bob1 = bob_receives(Bob0, [A0, A1]),
     %% Bob can send now (his recv ratchet established his send chain on A0).
-    {ok, {ReplyCT, Bob2}} = libsignal_protocol_nif:dr_encrypt_message(Bob1, <<"reply">>),
+    {ok, {ReplyCT, Bob2}} = libsignal_protocol_nif:dr_encrypt(Bob1, <<"reply">>),
     %% Alice receives reply -- triggers her DH ratchet.
-    {ok, {<<"reply">>, Alice2}} = libsignal_protocol_nif:dr_decrypt_message(Alice1, ReplyCT),
+    {ok, {<<"reply">>, Alice2}} = libsignal_protocol_nif:dr_decrypt(Alice1, ReplyCT),
     %% Alice sends A3 on her new chain.
     {ok, {A3CT, _Alice3}} =
-        libsignal_protocol_nif:dr_encrypt_message(Alice2, <<"post-ratchet">>),
+        libsignal_protocol_nif:dr_encrypt(Alice2, <<"post-ratchet">>),
     %% Bob receives A3 first -- his ratchet should bank key for A2.
-    {ok, {<<"post-ratchet">>, Bob3}} = libsignal_protocol_nif:dr_decrypt_message(Bob2, A3CT),
+    {ok, {<<"post-ratchet">>, Bob3}} = libsignal_protocol_nif:dr_decrypt(Bob2, A3CT),
     %% Late A2 must still decrypt via MKSKIPPED.
     {_A2Msg, A2CT} = A2,
-    {ok, {<<"msg-2">>, _Bob4}} = libsignal_protocol_nif:dr_decrypt_message(Bob3, A2CT).
+    {ok, {<<"msg-2">>, _Bob4}} = libsignal_protocol_nif:dr_decrypt(Bob3, A2CT).
 
 %% ============================================================================
 %% MAX_SKIP guard
@@ -112,7 +112,7 @@ skip_bound_rejected(Config) ->
     {Alice0, Bob0} = parties(Config),
     {_AliceN, Items} = alice_sends(Alice0, ?MAX_SKIP + 2),
     {_LastMsg, LastCT} = lists:last(Items),
-    {error, too_many_skipped} = libsignal_protocol_nif:dr_decrypt_message(Bob0, LastCT).
+    {error, too_many_skipped} = libsignal_protocol_nif:dr_decrypt(Bob0, LastCT).
 
 %% ============================================================================
 %% Property: random permutations of up to MAX_SKIP messages all decrypt
@@ -128,8 +128,8 @@ run_perm_trial(N) ->
     {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(96),
-    {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     {_AliceN, Items} = alice_sends(Alice, N),
     bob_receives(Bob, shuffle(Items)).
 

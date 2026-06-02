@@ -5,12 +5,12 @@
 %%
 %% Alice's side:
 %%   1. process_pre_key_bundle/2 -> {SK, AliceEphemeralPub}
-%%   2. init_double_ratchet/5 (as Alice)
+%%   2. dr_init/5 (as Alice)
 %%   3. dr_encrypt_prekey/3 -> PKSM-wrapped first message
 %% Bob's side:
 %%   1. pksm_decode/1 -> Alice's identity + ephemeral + spk/opk ids + inner DR
 %%   2. process_pre_key_bundle_bob/5 -> SK (same 96B Alice derived)
-%%   3. init_double_ratchet/5 (as Bob)
+%%   3. dr_init/5 (as Bob)
 %%   4. dr_decrypt/2 on the inner DR message
 %%
 %% Tests assume the NIF is loaded; init_per_suite gates on signal_nif:test_crypto/0.
@@ -86,7 +86,7 @@ handshake_through_pksm(WithOpk, RegId, SpkId, OpkIdOrUndef) ->
         libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv,
                                                      maps:get(bundle, Bob)),
     {ok, AliceDr} =
-        libsignal_protocol_nif:init_double_ratchet(SK, AliceIdPub,
+        libsignal_protocol_nif:dr_init(SK, AliceIdPub,
                                                    maps:get(id_pub, Bob),
                                                    <<>>, 1),
 
@@ -117,7 +117,7 @@ handshake_through_pksm(WithOpk, RegId, SpkId, OpkIdOrUndef) ->
     ?assertEqual(SK, BobSK),
 
     {ok, BobDr} =
-        libsignal_protocol_nif:init_double_ratchet(BobSK, maps:get(id_pub, Bob),
+        libsignal_protocol_nif:dr_init(BobSK, maps:get(id_pub, Bob),
                                                    AliceIdPub,
                                                    maps:get(id_priv, Bob), 0),
     {ok, {Decrypted, _BobDr2}} =
@@ -145,7 +145,7 @@ decode_truncated(_Config) ->
         libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv,
                                                      maps:get(bundle, Bob)),
     {ok, Dr} =
-        libsignal_protocol_nif:init_double_ratchet(SK, AliceIdPub,
+        libsignal_protocol_nif:dr_init(SK, AliceIdPub,
                                                    maps:get(id_pub, Bob),
                                                    <<>>, 1),
     {ok, {Wire, _}} =
