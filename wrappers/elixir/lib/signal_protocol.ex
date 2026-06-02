@@ -101,7 +101,7 @@ defmodule SignalProtocol do
       when is_binary(shared_secret) and is_binary(local_identity_pub) and
              is_binary(remote_identity_pub) and is_binary(self_identity_priv) and
              is_alice in [0, 1] do
-    @nif.init_double_ratchet(
+    @nif.dr_init(
       shared_secret,
       local_identity_pub,
       remote_identity_pub,
@@ -114,14 +114,14 @@ defmodule SignalProtocol do
           {:ok, {binary(), binary()}} | {:error, term()}
   def dr_encrypt_message(dr_session, message)
       when is_binary(dr_session) and is_binary(message) do
-    @nif.dr_encrypt_message(dr_session, message)
+    @nif.dr_encrypt(dr_session, message)
   end
 
   @spec dr_decrypt_message(binary(), binary()) ::
           {:ok, {binary(), binary()}} | {:error, term()}
   def dr_decrypt_message(dr_session, ciphertext)
       when is_binary(dr_session) and is_binary(ciphertext) do
-    @nif.dr_decrypt_message(dr_session, ciphertext)
+    @nif.dr_decrypt(dr_session, ciphertext)
   end
 
   @doc """

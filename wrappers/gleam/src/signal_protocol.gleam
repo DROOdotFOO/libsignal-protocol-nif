@@ -59,7 +59,7 @@ fn call_nif_process_pre_key_bundle(
   bundle: BitArray,
 ) -> Result(#(BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "init_double_ratchet")
+@external(erlang, "libsignal_protocol_nif", "dr_init")
 fn call_nif_init_double_ratchet(
   shared_secret: BitArray,
   local_identity_pub: BitArray,
@@ -68,13 +68,13 @@ fn call_nif_init_double_ratchet(
   is_alice: Int,
 ) -> Result(BitArray, String)
 
-@external(erlang, "libsignal_protocol_nif", "dr_encrypt_message")
+@external(erlang, "libsignal_protocol_nif", "dr_encrypt")
 fn call_nif_dr_encrypt(
   dr_session: BitArray,
   message: BitArray,
 ) -> Result(#(BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "dr_decrypt_message")
+@external(erlang, "libsignal_protocol_nif", "dr_decrypt")
 fn call_nif_dr_decrypt(
   dr_session: BitArray,
   ciphertext: BitArray,
