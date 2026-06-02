@@ -56,8 +56,14 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                                enif_make_atom(env, "invalid_identity_pub_size"));
     }
 
+    const char *err = NULL;
     double_ratchet_state_t state;
+    unsigned char dh_out[crypto_scalarmult_BYTES];
+    unsigned char kdf_out[96];
     memset(&state, 0, sizeof(state));
+    memset(dh_out, 0, sizeof(dh_out));
+    memset(kdf_out, 0, sizeof(kdf_out));
+
     memcpy(state.root_key, shared_secret.data, 32);
 
     // DR-HE bootstrap: shared_secret[64..96) seeds the next-header-key for
@@ -75,60 +81,42 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                                              local_identity_pub.data) != 0 ||
         crypto_sign_ed25519_pk_to_curve25519(state.remote_identity_pub,
                                              remote_identity_pub.data) != 0) {
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "identity_pub_conversion_failed"));
+        err = "identity_pub_conversion_failed"; goto cleanup;
     }
 
     if (is_alice) {
         // Alice uses the remote identity X25519 form as her initial dh_recv_public.
         memcpy(state.dh_recv_public, state.remote_identity_pub,
                crypto_box_PUBLICKEYBYTES);
-        // Fresh ephemeral DH pair
         if (crypto_box_keypair(state.dh_send_public, state.dh_send_private) != 0) {
-            sodium_memzero(&state, sizeof(state));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "key_generation_failed"));
+            err = "key_generation_failed"; goto cleanup;
         }
         state.dh_recv_initialized = true;
 
         // Initial send ratchet: KDF_RK_HE(root, DH(alice_eph_priv, bob_pub)).
         // L=96 output: root(32) || send_chain(32) || next_header_key_send(32).
         // The previously-X3DH-seeded NHKs rotates into HKs at this step.
-        unsigned char dh_out[crypto_scalarmult_BYTES];
         if (crypto_scalarmult(dh_out, state.dh_send_private,
                               state.dh_recv_public) != 0) {
-            sodium_memzero(&state, sizeof(state));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "dh_failed"));
+            err = "dh_failed"; goto cleanup;
         }
-        unsigned char kdf_out[96];
         if (hkdf_sha256(kdf_out, 96, state.root_key, 32, dh_out, 32,
                         (const unsigned char *)"DR-RK", 5) != 0) {
-            sodium_memzero(dh_out, sizeof(dh_out));
-            sodium_memzero(&state, sizeof(state));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "kdf_failed"));
+            err = "kdf_failed"; goto cleanup;
         }
         memcpy(state.header_key_send, state.next_header_key_send, 32);
         memcpy(state.root_key, kdf_out, 32);
         memcpy(state.send_chain_key, kdf_out + 32, 32);
         memcpy(state.next_header_key_send, kdf_out + 64, 32);
-        sodium_memzero(dh_out, sizeof(dh_out));
-        sodium_memzero(kdf_out, sizeof(kdf_out));
     } else {
         // Bob's self_identity_priv is his Ed25519 secret key. Convert to
         // X25519 priv for the initial send ratchet.
         if (self_priv.size != crypto_sign_SECRETKEYBYTES) {
-            sodium_memzero(&state, sizeof(state));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "invalid_self_priv_size"));
+            err = "invalid_self_priv_size"; goto cleanup;
         }
         if (crypto_sign_ed25519_sk_to_curve25519(state.dh_send_private,
                                                  self_priv.data) != 0) {
-            sodium_memzero(&state, sizeof(state));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "identity_priv_conversion_failed"));
+            err = "identity_priv_conversion_failed"; goto cleanup;
         }
         crypto_scalarmult_base(state.dh_send_public, state.dh_send_private);
         // dh_recv_public stays zero; dh_recv_initialized stays false.
@@ -136,9 +124,16 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 
     state.initialized = true;
-    state.send_message_number = 0;
-    state.recv_message_number = 0;
-    state.prev_send_length = 0;
+
+cleanup:
+    sodium_memzero(dh_out, sizeof(dh_out));
+    sodium_memzero(kdf_out, sizeof(kdf_out));
+
+    if (err) {
+        sodium_memzero(&state, sizeof(state));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
 
     ERL_NIF_TERM dr_session_term;
     unsigned char *dr_session_data =
@@ -369,52 +364,51 @@ ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
                                enif_make_atom(env, "invalid_session_size"));
     }
 
+    const char *err = NULL;
     double_ratchet_state_t state;
-    memcpy(&state, dr_session.data, DR_STATE_SIZE);
-
     unsigned char *inner_wire = NULL;
     size_t inner_wire_len = 0;
-    const char *err = dr_encrypt_core(&state, plaintext.data, plaintext.size,
-                                      &inner_wire, &inner_wire_len);
+    unsigned char *pksm_buf = NULL;
+    int pksm_len = -1;
+    ERL_NIF_TERM wire_term = 0;
+
+    memcpy(&state, dr_session.data, DR_STATE_SIZE);
+
+    err = dr_encrypt_core(&state, plaintext.data, plaintext.size,
+                          &inner_wire, &inner_wire_len);
+    if (err) goto cleanup;
+
+    // PKSM body: registration_id, base_key(32), identity_key(32), optional
+    // pre_key_id, signed_pre_key_id, inner_message. Worst-case overhead is
+    // 6 tags + 6 varints + the two 32B keys = ~80B + inner.
+    pksm_buf = enif_alloc(80 + inner_wire_len);
+    if (!pksm_buf) { err = "memory_allocation_failed"; goto cleanup; }
+
+    pksm_len = pksm_encode(pksm_buf, 80 + inner_wire_len,
+                           registration_id,
+                           base_key.data, base_key.size,
+                           state.local_identity_pub, crypto_box_PUBLICKEYBYTES,
+                           pre_key_id, has_pre_key_id,
+                           signed_pre_key_id,
+                           inner_wire, inner_wire_len);
+    if (pksm_len < 0) { err = "pksm_encode_failed"; goto cleanup; }
+
+    {
+        size_t wire_len = 1 + (size_t)pksm_len;
+        unsigned char *wire_data = enif_make_new_binary(env, wire_len, &wire_term);
+        wire_data[0] = DR_VERSION_BYTE;
+        memcpy(wire_data + 1, pksm_buf, (size_t)pksm_len);
+    }
+
+cleanup:
+    if (inner_wire) enif_free(inner_wire);
+    if (pksm_buf) enif_free(pksm_buf);
+
     if (err) {
         sodium_memzero(&state, sizeof(state));
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, err));
     }
-
-    // PKSM body: registration_id, base_key(32), identity_key(32), optional
-    // pre_key_id, signed_pre_key_id, inner_message. Worst-case overhead is
-    // 6 tags + 6 varints + the two 32B keys = ~80B + inner.
-    size_t pksm_cap = 80 + inner_wire_len;
-    unsigned char *pksm_buf = enif_alloc(pksm_cap);
-    if (!pksm_buf) {
-        enif_free(inner_wire);
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "memory_allocation_failed"));
-    }
-
-    int pksm_len = pksm_encode(pksm_buf, pksm_cap,
-                               registration_id,
-                               base_key.data, base_key.size,
-                               state.local_identity_pub, crypto_box_PUBLICKEYBYTES,
-                               pre_key_id, has_pre_key_id,
-                               signed_pre_key_id,
-                               inner_wire, inner_wire_len);
-    enif_free(inner_wire);
-    if (pksm_len < 0) {
-        enif_free(pksm_buf);
-        sodium_memzero(&state, sizeof(state));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "pksm_encode_failed"));
-    }
-
-    size_t wire_len = 1 + (size_t)pksm_len;
-    ERL_NIF_TERM wire_term;
-    unsigned char *wire_data = enif_make_new_binary(env, wire_len, &wire_term);
-    wire_data[0] = DR_VERSION_BYTE;
-    memcpy(wire_data + 1, pksm_buf, (size_t)pksm_len);
-    enif_free(pksm_buf);
 
     ERL_NIF_TERM updated_session_term;
     unsigned char *updated_session_data =
