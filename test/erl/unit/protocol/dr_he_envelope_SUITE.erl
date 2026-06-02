@@ -14,11 +14,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
--export([wire_hides_counter/1,
-         wire_hides_ratchet_key/1,
-         tampered_envelope_rejected/1,
-         wrong_session_cannot_decrypt/1,
-         malformed_outer_envelope_rejected/1]).
+-export([wire_hides_counter/1, wire_hides_ratchet_key/1, tampered_envelope_rejected/1,
+         wrong_session_cannot_decrypt/1, malformed_outer_envelope_rejected/1]).
 
 all() ->
     [wire_hides_counter,
@@ -30,8 +27,10 @@ all() ->
 init_per_suite(Config) ->
     rand:seed(exsss, {2, 3, 5}),
     case signal_nif:test_crypto() of
-        crypto_ok -> Config;
-        Other -> {skip, {nif_init_failed, Other}}
+        crypto_ok ->
+            Config;
+        Other ->
+            {skip, {nif_init_failed, Other}}
     end.
 
 end_per_suite(_Config) ->
@@ -114,15 +113,12 @@ tampered_envelope_rejected(Config) ->
 wrong_session_cannot_decrypt(Config) ->
     Alice = ?config(alice, Config),
     {ok, {OtherPub, _OtherPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {OtherBobPub, OtherBobPriv}} =
-        libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {OtherBobPub, OtherBobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     OtherSS = rand:bytes(96),
     {ok, OtherBob} =
-        libsignal_protocol_nif:dr_init(
-          OtherSS, OtherBobPub, OtherPub, OtherBobPriv, 0),
+        libsignal_protocol_nif:dr_init(OtherSS, OtherBobPub, OtherPub, OtherBobPriv, 0),
     {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt(Alice, <<"oops">>),
-    ?assertEqual({error, bad_mac},
-                 libsignal_protocol_nif:dr_decrypt(OtherBob, CT)).
+    ?assertEqual({error, bad_mac}, libsignal_protocol_nif:dr_decrypt(OtherBob, CT)).
 
 %% Truncating the outer envelope past the MAC region triggers a structural
 %% reject before any cryptographic work happens.
@@ -130,8 +126,7 @@ malformed_outer_envelope_rejected(Config) ->
     Bob = ?config(bob, Config),
     %% Just the version byte + 8 zero MAC bytes -- no enc_header field.
     Bogus = <<16#33, 0:64>>,
-    ?assertMatch({error, malformed_message},
-                 libsignal_protocol_nif:dr_decrypt(Bob, Bogus)).
+    ?assertMatch({error, malformed_message}, libsignal_protocol_nif:dr_decrypt(Bob, Bogus)).
 
 %% ============================================================================
 %% Helpers
@@ -160,14 +155,19 @@ longest_common_substring_loop(A, B, ASize, BSize, I, J, Acc) ->
     Len = match_prefix_len(A, I, B, J, MaxLen, 0),
     NewAcc =
         case Len > byte_size(Acc) of
-            true -> binary:part(A, I, Len);
-            false -> Acc
+            true ->
+                binary:part(A, I, Len);
+            false ->
+                Acc
         end,
     longest_common_substring_loop(A, B, ASize, BSize, I, J + 1, NewAcc).
 
-match_prefix_len(_, _, _, _, MaxLen, N) when N >= MaxLen -> N;
+match_prefix_len(_, _, _, _, MaxLen, N) when N >= MaxLen ->
+    N;
 match_prefix_len(A, I, B, J, MaxLen, N) ->
     case binary:at(A, I + N) =:= binary:at(B, J + N) of
-        true -> match_prefix_len(A, I, B, J, MaxLen, N + 1);
-        false -> N
+        true ->
+            match_prefix_len(A, I, B, J, MaxLen, N + 1);
+        false ->
+            N
     end.

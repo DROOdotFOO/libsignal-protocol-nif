@@ -19,9 +19,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
--export([handshake_with_opk/1, handshake_without_opk/1,
-         decode_malformed/1, decode_truncated/1,
-         bob_x3dh_matches_alice/1]).
+-export([handshake_with_opk/1, handshake_without_opk/1, decode_malformed/1,
+         decode_truncated/1, bob_x3dh_matches_alice/1]).
 
 all() ->
     [handshake_with_opk,
@@ -33,8 +32,10 @@ all() ->
 init_per_suite(Config) ->
     rand:seed(exsss, {89, 97, 101}),
     case signal_nif:test_crypto() of
-        crypto_ok -> Config;
-        Other -> {skip, {nif_init_failed, Other}}
+        crypto_ok ->
+            Config;
+        Other ->
+            {skip, {nif_init_failed, Other}}
     end.
 
 end_per_suite(_Config) ->
@@ -56,14 +57,19 @@ bob_prepare(WithOpk) ->
     case WithOpk of
         true ->
             {ok, {OpkPub, OpkPriv}} = signal_nif:generate_curve25519_keypair(),
-            Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary,
-                       OpkPub/binary>>,
-            #{bundle => Bundle, id_pub => BobIdPub, id_priv => BobIdPriv,
-              spk_priv => SpkPriv, opk_priv => OpkPriv};
+            Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary, OpkPub/binary>>,
+            #{bundle => Bundle,
+              id_pub => BobIdPub,
+              id_priv => BobIdPriv,
+              spk_priv => SpkPriv,
+              opk_priv => OpkPriv};
         false ->
             Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary>>,
-            #{bundle => Bundle, id_pub => BobIdPub, id_priv => BobIdPriv,
-              spk_priv => SpkPriv, opk_priv => <<>>}
+            #{bundle => Bundle,
+              id_pub => BobIdPub,
+              id_priv => BobIdPriv,
+              spk_priv => SpkPriv,
+              opk_priv => <<>>}
     end.
 
 %% ============================================================================
@@ -77,18 +83,14 @@ handshake_without_opk(_Config) ->
     handshake_through_pksm(false, 5678, 99, undefined).
 
 handshake_through_pksm(WithOpk, RegId, SpkId, OpkIdOrUndef) ->
-    {ok, {AliceIdPub, AliceIdPriv}} =
-        libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {AliceIdPub, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     Bob = bob_prepare(WithOpk),
 
     %% Alice consumes Bob's bundle.
     {ok, {SK, AliceEphPub}} =
-        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv,
-                                                     maps:get(bundle, Bob)),
+        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, maps:get(bundle, Bob)),
     {ok, AliceDr} =
-        libsignal_protocol_nif:dr_init(SK, AliceIdPub,
-                                                   maps:get(id_pub, Bob),
-                                                   <<>>, 1),
+        libsignal_protocol_nif:dr_init(SK, AliceIdPub, maps:get(id_pub, Bob), <<>>, 1),
 
     Plaintext = <<"hello bob via PKSM">>,
     Info = {RegId, OpkIdOrUndef, SpkId, AliceEphPub},
@@ -117,11 +119,12 @@ handshake_through_pksm(WithOpk, RegId, SpkId, OpkIdOrUndef) ->
     ?assertEqual(SK, BobSK),
 
     {ok, BobDr} =
-        libsignal_protocol_nif:dr_init(BobSK, maps:get(id_pub, Bob),
-                                                   AliceIdPub,
-                                                   maps:get(id_priv, Bob), 0),
-    {ok, {Decrypted, _BobDr2}} =
-        libsignal_protocol_nif:dr_decrypt(BobDr, InnerMsg),
+        libsignal_protocol_nif:dr_init(BobSK,
+                                       maps:get(id_pub, Bob),
+                                       AliceIdPub,
+                                       maps:get(id_priv, Bob),
+                                       0),
+    {ok, {Decrypted, _BobDr2}} = libsignal_protocol_nif:dr_decrypt(BobDr, InnerMsg),
     ?assertEqual(Plaintext, Decrypted).
 
 decode_malformed(_Config) ->
@@ -130,30 +133,21 @@ decode_malformed(_Config) ->
                  libsignal_protocol_nif:pksm_decode(<<16#22, 1, 2, 3>>)),
     %% Random garbage with right version byte.
     ?assertEqual({error, malformed_message},
-                 libsignal_protocol_nif:pksm_decode(
-                     <<16#33, 16#FF, 16#FF, 16#FF, 16#FF>>)),
+                 libsignal_protocol_nif:pksm_decode(<<16#33, 16#FF, 16#FF, 16#FF, 16#FF>>)),
     %% Empty.
-    ?assertEqual({error, malformed_message},
-                 libsignal_protocol_nif:pksm_decode(<<>>)).
+    ?assertEqual({error, malformed_message}, libsignal_protocol_nif:pksm_decode(<<>>)).
 
 decode_truncated(_Config) ->
     %% Build a valid wire then chop the last byte off.
-    {ok, {AliceIdPub, AliceIdPriv}} =
-        libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {AliceIdPub, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     Bob = bob_prepare(false),
     {ok, {SK, AliceEphPub}} =
-        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv,
-                                                     maps:get(bundle, Bob)),
-    {ok, Dr} =
-        libsignal_protocol_nif:dr_init(SK, AliceIdPub,
-                                                   maps:get(id_pub, Bob),
-                                                   <<>>, 1),
+        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, maps:get(bundle, Bob)),
+    {ok, Dr} = libsignal_protocol_nif:dr_init(SK, AliceIdPub, maps:get(id_pub, Bob), <<>>, 1),
     {ok, {Wire, _}} =
-        libsignal_protocol_nif:dr_encrypt_prekey(Dr, <<"x">>,
-                                                 {1, undefined, 2, AliceEphPub}),
+        libsignal_protocol_nif:dr_encrypt_prekey(Dr, <<"x">>, {1, undefined, 2, AliceEphPub}),
     Trunc = binary:part(Wire, 0, byte_size(Wire) - 1),
-    ?assertEqual({error, malformed_message},
-                 libsignal_protocol_nif:pksm_decode(Trunc)).
+    ?assertEqual({error, malformed_message}, libsignal_protocol_nif:pksm_decode(Trunc)).
 
 bob_x3dh_matches_alice(_Config) ->
     %% Same SK on both sides without going through PKSM. Covers the OPK and
@@ -162,12 +156,10 @@ bob_x3dh_matches_alice(_Config) ->
     ok.
 
 bob_x3dh_check(WithOpk) ->
-    {ok, {AliceIdPub, AliceIdPriv}} =
-        libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {AliceIdPub, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     Bob = bob_prepare(WithOpk),
     {ok, {AliceSK, AliceEphPub}} =
-        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv,
-                                                     maps:get(bundle, Bob)),
+        libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, maps:get(bundle, Bob)),
     {ok, BobSK} =
         libsignal_protocol_nif:process_pre_key_bundle_bob(
             maps:get(id_priv, Bob),

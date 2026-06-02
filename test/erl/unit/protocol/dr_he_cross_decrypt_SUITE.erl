@@ -17,10 +17,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
--export([roundtrip_random_plaintexts/1,
-         bidirectional_pingpong_random_rounds/1,
-         random_reorder_within_chain/1,
-         cross_session_isolation/1]).
+-export([roundtrip_random_plaintexts/1, bidirectional_pingpong_random_rounds/1,
+         random_reorder_within_chain/1, cross_session_isolation/1]).
 
 -define(SEED, {11, 13, 17}).
 -define(ROUNDTRIP_TRIALS, 50).
@@ -41,8 +39,10 @@ all() ->
 init_per_suite(Config) ->
     rand:seed(exsss, ?SEED),
     case signal_nif:test_crypto() of
-        crypto_ok -> Config;
-        Other -> {skip, {nif_init_failed, Other}}
+        crypto_ok ->
+            Config;
+        Other ->
+            {skip, {nif_init_failed, Other}}
     end.
 
 end_per_suite(_Config) ->
@@ -79,20 +79,19 @@ run_pingpong_trial(N) ->
     K = rand:uniform(?PINGPONG_MAX_ROUNDS),
     %% Each round: Alice -> Bob, then Bob -> Alice. K rounds total.
     Final =
-        lists:foldl(
-          fun(Round, {A0, B0}) ->
-              PtAB = random_plaintext(),
-              {ok, {CtAB, A1}} = libsignal_protocol_nif:dr_encrypt(A0, PtAB),
-              {ok, {RxAB, B1}} = libsignal_protocol_nif:dr_decrypt(B0, CtAB),
-              ?assertEqual({N, Round, ab, PtAB}, {N, Round, ab, RxAB}),
-              PtBA = random_plaintext(),
-              {ok, {CtBA, B2}} = libsignal_protocol_nif:dr_encrypt(B1, PtBA),
-              {ok, {RxBA, A2}} = libsignal_protocol_nif:dr_decrypt(A1, CtBA),
-              ?assertEqual({N, Round, ba, PtBA}, {N, Round, ba, RxBA}),
-              {A2, B2}
-          end,
-          {Alice0, Bob0},
-          lists:seq(1, K)),
+        lists:foldl(fun(Round, {A0, B0}) ->
+                       PtAB = random_plaintext(),
+                       {ok, {CtAB, A1}} = libsignal_protocol_nif:dr_encrypt(A0, PtAB),
+                       {ok, {RxAB, B1}} = libsignal_protocol_nif:dr_decrypt(B0, CtAB),
+                       ?assertEqual({N, Round, ab, PtAB}, {N, Round, ab, RxAB}),
+                       PtBA = random_plaintext(),
+                       {ok, {CtBA, B2}} = libsignal_protocol_nif:dr_encrypt(B1, PtBA),
+                       {ok, {RxBA, A2}} = libsignal_protocol_nif:dr_decrypt(A1, CtBA),
+                       ?assertEqual({N, Round, ba, PtBA}, {N, Round, ba, RxBA}),
+                       {A2, B2}
+                    end,
+                    {Alice0, Bob0},
+                    lists:seq(1, K)),
     {_, _} = Final,
     ok.
 
@@ -112,28 +111,28 @@ run_reorder_trial(N) ->
     K = ?REORDER_MIN_CHAIN + rand:uniform(KSpan) - 1,
     %% Alice sends K messages, all in the same chain.
     {_AliceN, Sent} =
-        lists:foldl(
-          fun(I, {AAcc, Acc}) ->
-              PT = <<"trial-", (integer_to_binary(N))/binary,
-                     "-msg-", (integer_to_binary(I))/binary,
-                     "-", (rand:bytes(8))/binary>>,
-              {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt(AAcc, PT),
-              {ANext, [{PT, CT} | Acc]}
-          end,
-          {Alice0, []},
-          lists:seq(0, K - 1)),
+        lists:foldl(fun(I, {AAcc, Acc}) ->
+                       PT = <<"trial-",
+                              (integer_to_binary(N))/binary,
+                              "-msg-",
+                              (integer_to_binary(I))/binary,
+                              "-",
+                              (rand:bytes(8))/binary>>,
+                       {ok, {CT, ANext}} = libsignal_protocol_nif:dr_encrypt(AAcc, PT),
+                       {ANext, [{PT, CT} | Acc]}
+                    end,
+                    {Alice0, []},
+                    lists:seq(0, K - 1)),
     Pairs = lists:reverse(Sent),
     Shuffled = shuffle(Pairs),
     %% Bob decrypts in shuffled order; every plaintext must match.
-    lists:foldl(
-      fun({Expected, CT}, BAcc) ->
-          {ok, {Got, BNext}} =
-              libsignal_protocol_nif:dr_decrypt(BAcc, CT),
-          ?assertEqual({N, K, Expected}, {N, K, Got}),
-          BNext
-      end,
-      Bob0,
-      Shuffled),
+    lists:foldl(fun({Expected, CT}, BAcc) ->
+                   {ok, {Got, BNext}} = libsignal_protocol_nif:dr_decrypt(BAcc, CT),
+                   ?assertEqual({N, K, Expected}, {N, K, Got}),
+                   BNext
+                end,
+                Bob0,
+                Shuffled),
     ok.
 
 %% Property: a wire ciphertext from session A cannot be decrypted by any
@@ -154,32 +153,27 @@ run_isolation_trial(N) ->
     {AliceB, BobB} = fresh_pair(),
     BobBWarm = warm_up(AliceB, BobB, N),
     PT = random_plaintext(),
-    {ok, {CT, _AliceA1}} =
-        libsignal_protocol_nif:dr_encrypt(AliceA, PT),
+    {ok, {CT, _AliceA1}} = libsignal_protocol_nif:dr_encrypt(AliceA, PT),
     Result = libsignal_protocol_nif:dr_decrypt(BobBWarm, CT),
     ?assertEqual({N, {error, bad_mac}}, {N, Result}).
 
 %% Run 0..R rounds of A->B then B->A within session B so Bob's HKr/NHKr
 %% hold chain-derived keys (not just the X3DH seed). Returns the evolved
 %% Bob state for the cross-session check.
-warm_up(AliceB, BobB, N) when N rem 2 =:= 0 -> BobB;
+warm_up(AliceB, BobB, N) when N rem 2 =:= 0 ->
+    BobB;
 warm_up(AliceB, BobB, _N) ->
     Rounds = rand:uniform(4),
     {_, B} =
-        lists:foldl(
-          fun(_, {A0, B0}) ->
-              {ok, {Ct1, A1}} =
-                  libsignal_protocol_nif:dr_encrypt(A0, <<"warm-ab">>),
-              {ok, {_, B1}} =
-                  libsignal_protocol_nif:dr_decrypt(B0, Ct1),
-              {ok, {Ct2, B2}} =
-                  libsignal_protocol_nif:dr_encrypt(B1, <<"warm-ba">>),
-              {ok, {_, A2}} =
-                  libsignal_protocol_nif:dr_decrypt(A1, Ct2),
-              {A2, B2}
-          end,
-          {AliceB, BobB},
-          lists:seq(1, Rounds)),
+        lists:foldl(fun(_, {A0, B0}) ->
+                       {ok, {Ct1, A1}} = libsignal_protocol_nif:dr_encrypt(A0, <<"warm-ab">>),
+                       {ok, {_, B1}} = libsignal_protocol_nif:dr_decrypt(B0, Ct1),
+                       {ok, {Ct2, B2}} = libsignal_protocol_nif:dr_encrypt(B1, <<"warm-ba">>),
+                       {ok, {_, A2}} = libsignal_protocol_nif:dr_decrypt(A1, Ct2),
+                       {A2, B2}
+                    end,
+                    {AliceB, BobB},
+                    lists:seq(1, Rounds)),
     B.
 
 %% ============================================================================
@@ -196,10 +190,8 @@ fresh_pair() ->
     {ok, {AlicePub, _}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     SS = rand:bytes(96),
-    {ok, Alice} =
-        libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} =
-        libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     {Alice, Bob}.
 
 random_plaintext() ->

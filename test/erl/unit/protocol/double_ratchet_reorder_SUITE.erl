@@ -96,8 +96,7 @@ reorder_across_dh_ratchet(Config) ->
     %% Alice receives reply -- triggers her DH ratchet.
     {ok, {<<"reply">>, Alice2}} = libsignal_protocol_nif:dr_decrypt(Alice1, ReplyCT),
     %% Alice sends A3 on her new chain.
-    {ok, {A3CT, _Alice3}} =
-        libsignal_protocol_nif:dr_encrypt(Alice2, <<"post-ratchet">>),
+    {ok, {A3CT, _Alice3}} = libsignal_protocol_nif:dr_encrypt(Alice2, <<"post-ratchet">>),
     %% Bob receives A3 first -- his ratchet should bank key for A2.
     {ok, {<<"post-ratchet">>, Bob3}} = libsignal_protocol_nif:dr_decrypt(Bob2, A3CT),
     %% Late A2 must still decrypt via MKSKIPPED.

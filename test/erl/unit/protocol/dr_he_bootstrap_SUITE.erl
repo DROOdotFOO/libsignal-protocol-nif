@@ -16,10 +16,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
--export([rejects_64_byte_shared_secret/1,
-         rejects_95_byte_shared_secret/1,
-         rejects_zero_byte_shared_secret/1,
-         accepts_96_byte_shared_secret/1,
+-export([rejects_64_byte_shared_secret/1, rejects_95_byte_shared_secret/1,
+         rejects_zero_byte_shared_secret/1, accepts_96_byte_shared_secret/1,
          dr_state_grows_for_header_keys/1]).
 
 all() ->
@@ -31,8 +29,10 @@ all() ->
 
 init_per_suite(Config) ->
     case signal_nif:test_crypto() of
-        crypto_ok -> Config;
-        Other -> {skip, {nif_init_failed, Other}}
+        crypto_ok ->
+            Config;
+        Other ->
+            {skip, {nif_init_failed, Other}}
     end.
 
 end_per_suite(_Config) ->
@@ -46,31 +46,24 @@ rejects_64_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(64),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:dr_init(
-                   SS, AlicePub, BobPub, <<>>, 1)).
+                 libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1)).
 
 rejects_95_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(95),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:dr_init(
-                   SS, AlicePub, BobPub, <<>>, 1)).
+                 libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1)).
 
 rejects_zero_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     ?assertEqual({error, invalid_shared_secret_size},
-                 libsignal_protocol_nif:dr_init(
-                   <<>>, AlicePub, BobPub, <<>>, 1)).
+                 libsignal_protocol_nif:dr_init(<<>>, AlicePub, BobPub, <<>>, 1)).
 
 accepts_96_byte_shared_secret(_Config) ->
     {AlicePub, _AlicePriv, BobPub, BobPriv} = fresh_identities(),
     SS = rand:bytes(96),
-    ?assertMatch({ok, _},
-                 libsignal_protocol_nif:dr_init(
-                   SS, AlicePub, BobPub, <<>>, 1)),
-    ?assertMatch({ok, _},
-                 libsignal_protocol_nif:dr_init(
-                   SS, BobPub, AlicePub, BobPriv, 0)).
+    ?assertMatch({ok, _}, libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1)),
+    ?assertMatch({ok, _}, libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0)).
 
 %% Pin the DR state binary size on this build target so unintended struct
 %% growth (extra fields, padding) is caught at test time. 2836 bytes equals
@@ -80,8 +73,7 @@ accepts_96_byte_shared_secret(_Config) ->
 dr_state_grows_for_header_keys(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(96),
-    {ok, Alice} =
-        libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
     ?assertEqual(2836, byte_size(Alice)).
 
 %% ============================================================================

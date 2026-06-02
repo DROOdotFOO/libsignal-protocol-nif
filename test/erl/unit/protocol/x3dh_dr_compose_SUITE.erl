@@ -101,10 +101,8 @@ dr_handshake_after_x3dh(_Config) ->
     {ok, {AliceIdPub, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
-    {ok, Alice} =
-        libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
-    {ok, Bob} =
-        libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
     Msg = <<"x3dh then dr">>,
     {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt(Alice, Msg),
     {ok, {PT, Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
@@ -147,10 +145,8 @@ run_trial() ->
     {ok, {AliceIdPub, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, BobIdPub, BobIdPriv} = build_bundle(),
     {ok, {SS, _EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
-    {ok, Alice} =
-        libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
-    {ok, Bob} =
-        libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
+    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AliceIdPub, BobIdPub, <<>>, 1),
+    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobIdPub, AliceIdPub, BobIdPriv, 0),
     Msg = <<"random trial ", (rand:bytes(8))/binary>>,
     {ok, {CT, _}} = libsignal_protocol_nif:dr_encrypt(Alice, Msg),
     {ok, {PT, _}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
