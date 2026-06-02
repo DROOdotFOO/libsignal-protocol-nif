@@ -60,6 +60,7 @@ add_library(signal_nif SHARED
 add_library(libsignal_protocol_nif SHARED
     libsignal_protocol_nif.c
     dr.c
+    dr_crypto.c
     dr_proto.c
     keys.c
     pksm.c

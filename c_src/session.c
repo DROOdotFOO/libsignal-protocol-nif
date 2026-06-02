@@ -1,5 +1,5 @@
 #include "session.h"
-#include "dr.h"
+#include "dr_crypto.h"
 #include <sodium.h>
 #include <stdbool.h>
 #include <stdlib.h>
