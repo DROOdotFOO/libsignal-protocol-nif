@@ -64,8 +64,7 @@ build: check-project-root $(BUILD_DIR)
 	mkdir -p _build/default/lib/nif/priv
 	mkdir -p _build/test/lib/nif/priv
 	mkdir -p _build/unit+test/lib/nif/priv
-	mkdir -p _build/integration+test/lib/nif/priv
-	mkdir -p _build/smoke+test/lib/nif/priv
+	mkdir -p _build/unit+test/extras/test/priv
 	# Copy .so files (Linux) and .dylib files (macOS)
 	cp priv/*.so _build/default/lib/nif/priv/ 2>/dev/null || true
 	cp priv/*.dylib _build/default/lib/nif/priv/ 2>/dev/null || true
@@ -73,20 +72,8 @@ build: check-project-root $(BUILD_DIR)
 	cp priv/*.dylib _build/test/lib/nif/priv/ 2>/dev/null || true
 	cp priv/*.so _build/unit+test/lib/nif/priv/ 2>/dev/null || true
 	cp priv/*.dylib _build/unit+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.so _build/integration+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/integration+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.so _build/smoke+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/smoke+test/lib/nif/priv/ 2>/dev/null || true
-	# Also copy to test-specific directories
-	mkdir -p _build/unit+test/extras/test/priv
-	mkdir -p _build/integration+test/extras/test/priv
-	mkdir -p _build/smoke+test/extras/test/priv
 	cp priv/*.so _build/unit+test/extras/test/priv/ 2>/dev/null || true
 	cp priv/*.dylib _build/unit+test/extras/test/priv/ 2>/dev/null || true
-	cp priv/*.so _build/integration+test/extras/test/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/integration+test/extras/test/priv/ 2>/dev/null || true
-	cp priv/*.so _build/smoke+test/extras/test/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/smoke+test/extras/test/priv/ 2>/dev/null || true
 	@echo "Build completed successfully!"
 
 # CI-specific build target

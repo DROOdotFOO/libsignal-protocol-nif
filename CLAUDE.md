@@ -22,7 +22,7 @@ make diagnose        # prints state of build dirs; flags nested c_src/build/c_sr
 - `signal_nif.{so,dylib}` — lower-level crypto primitives (`erl_src/signal_nif.erl` / `c_src/signal_nif.c`)
 - `libsignal_protocol_nif.{so,dylib}` — main module (`erl_src/libsignal_protocol_nif.erl` / `c_src/libsignal_protocol_nif.c`), includes session, X3DH, double ratchet (DR-HE), PKSM, keys
 
-After cmake produces the libs, the Makefile **and** `scripts/copy_nifs.sh` (a rebar3 post-compile hook in `rebar.config`) copy them into per-profile build dirs: `_build/{default,test,unit+test}/lib/nif/priv/` and matching `extras/test/priv/`. The `integration+test` and `smoke+test` build dirs are also created by `copy_nifs.sh` for historical reasons; no rebar3 profile currently uses them. If the NIF loads in `default` but not in `unit+test`, the copy step is the suspect.
+After cmake produces the libs, the Makefile **and** `scripts/copy_nifs.sh` (a rebar3 post-compile hook in `rebar.config`) copy them into per-profile build dirs: `_build/{default,test,unit+test}/lib/nif/priv/` and matching `extras/test/priv/`. If the NIF loads in `default` but not in `unit+test`, the copy step is the suspect.
 
 macOS-specific: `c_src/CMakeLists.txt` links each NIF with `-undefined dynamic_lookup` so `enif_*` symbols resolve at load time against the host BEAM (no explicit `erl_interface` link). The Makefile sets `DYLD_LIBRARY_PATH` for the openssl@3 keg so tests can find it.
 

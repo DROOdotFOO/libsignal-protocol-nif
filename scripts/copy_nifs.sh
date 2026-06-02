@@ -74,11 +74,7 @@ TARGETS="
 _build/default/lib/nif/priv
 _build/test/lib/nif/priv
 _build/unit+test/lib/nif/priv
-_build/integration+test/lib/nif/priv
-_build/smoke+test/lib/nif/priv
 _build/unit+test/extras/test/priv
-_build/integration+test/extras/test/priv
-_build/smoke+test/extras/test/priv
 "
 
 # Create directories and copy files
