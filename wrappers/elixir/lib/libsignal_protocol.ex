@@ -2,33 +2,28 @@ defmodule LibsignalProtocol do
   @moduledoc """
   Elixir wrapper for the Signal Protocol NIF.
 
-  Normalizes NIF error terms to strings; otherwise returns NIF results
-  unchanged. A missing NIF raises `UndefinedFunctionError` at the call
-  site -- callers must ensure the NIF is built and on the load path.
+  Mirrors the NIF's `{:ok, term} | {:error, atom}` return shape; consistent
+  with `SignalProtocol`. A missing NIF raises `UndefinedFunctionError` at
+  the call site -- callers must ensure the NIF is built and on the load
+  path.
   """
 
   @nif :libsignal_protocol_nif
 
-  @spec init() :: :ok | {:error, String.t()}
+  @spec init() :: :ok | {:error, atom()}
   def init do
     :code.ensure_loaded(@nif)
-    @nif.init() |> normalize()
+    @nif.init()
   end
 
-  @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, String.t()}
+  @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, atom()}
   def create_session(local_private_key, remote_public_key)
       when is_binary(local_private_key) and is_binary(remote_public_key) do
-    @nif.create_session(local_private_key, remote_public_key) |> normalize()
+    @nif.create_session(local_private_key, remote_public_key)
   end
 
-  @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, String.t()}
+  @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, atom()}
   def generate_identity_key_pair do
-    @nif.generate_identity_key_pair() |> normalize()
+    @nif.generate_identity_key_pair()
   end
-
-  defp normalize(:ok), do: :ok
-  defp normalize({:ok, _} = ok), do: ok
-  defp normalize({:error, reason}) when is_binary(reason), do: {:error, reason}
-  defp normalize({:error, reason}) when is_atom(reason), do: {:error, Atom.to_string(reason)}
-  defp normalize({:error, reason}), do: {:error, inspect(reason)}
 end

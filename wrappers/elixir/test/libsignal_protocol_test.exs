@@ -9,9 +9,8 @@ defmodule LibsignalProtocolTest do
           assert true
 
         {:error, reason} ->
-          # For now, we'll accept NIF loading errors as the test environment might not have the NIF
-          IO.puts("NIF init failed (expected in test environment): #{reason}")
-          assert true
+          IO.puts("NIF init failed (expected in test environment): #{inspect(reason)}")
+          assert is_atom(reason)
       end
     end
   end
@@ -26,9 +25,8 @@ defmodule LibsignalProtocolTest do
           assert byte_size(signature) > 0
 
         {:error, reason} ->
-          # Accept errors if NIF is not properly loaded in test environment
-          IO.puts("Key generation failed (expected if NIF not loaded): #{reason}")
-          assert is_binary(reason)
+          IO.puts("Key generation failed (expected if NIF not loaded): #{inspect(reason)}")
+          assert is_atom(reason)
       end
     end
   end
@@ -45,9 +43,8 @@ defmodule LibsignalProtocolTest do
           assert byte_size(session) > 0
 
         {:error, reason} ->
-          # Accept errors if NIF is not properly loaded in test environment
-          IO.puts("Session creation failed (expected if NIF not loaded): #{reason}")
-          assert is_binary(reason)
+          IO.puts("Session creation failed (expected if NIF not loaded): #{inspect(reason)}")
+          assert is_atom(reason)
       end
     end
   end
