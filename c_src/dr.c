@@ -157,168 +157,109 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
                                    const unsigned char *pt, size_t pt_len,
                                    unsigned char **out_wire, size_t *out_wire_len)
 {
-    if (!state->initialized) return "session_not_initialized";
+    const char *err = NULL;
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+    unsigned char next_chain[DR_CHAIN_KEY_SIZE];
+    unsigned char cipher_key[32], mac_key[32], iv[16];
+    unsigned char hcipher[32];
+    unsigned char inner_header[64];
+    unsigned char mac[DR_MAC_LEN];
+    unsigned char *cbc_buf = NULL;
+    unsigned char *enc_header = NULL;
+    unsigned char *envelope = NULL;
+    unsigned char *wire = NULL;
+    size_t cbc_len = 0, header_ct_len = 0;
+    size_t inner_header_len = 0, enc_header_len = 0, envelope_len = 0;
+    size_t wire_len = 0;
+
+    if (!state->initialized) { err = "session_not_initialized"; goto cleanup; }
     // Bob cannot send before receiving Alice's first message -- his
     // send_chain_key is only derived during the receive ratchet.
-    if (!state->dh_recv_initialized) return "must_receive_first";
+    if (!state->dh_recv_initialized) { err = "must_receive_first"; goto cleanup; }
 
     // Derive per-message keys: cipher_key(32) || mac_key(32) || iv(16)
     // from messageKey via HKDF (info="WhisperMessageKeys", Signal spec).
-    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     derive_message_key(message_key, state->send_chain_key);
-    unsigned char next_chain[DR_CHAIN_KEY_SIZE];
     advance_chain_key(next_chain, state->send_chain_key);
 
-    unsigned char cipher_key[32], mac_key[32], iv[16];
     if (dr_derive_message_keys(cipher_key, mac_key, iv, message_key) != 0) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        return "kdf_failed";
+        err = "kdf_failed"; goto cleanup;
     }
 
     // AES-256-CBC + PKCS#7 encrypt. Output is always plaintext_len + 1..16.
-    size_t cbc_buf_cap = pt_len + 16;
-    unsigned char *cbc_buf = enif_alloc(cbc_buf_cap);
-    if (!cbc_buf) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return "memory_allocation_failed";
-    }
-    size_t cbc_len = 0;
+    cbc_buf = enif_alloc(pt_len + 16);
+    if (!cbc_buf) { err = "memory_allocation_failed"; goto cleanup; }
     if (dr_aes_cbc_encrypt(cbc_buf, &cbc_len, pt, pt_len, cipher_key, iv) != 0) {
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return "encryption_failed";
+        err = "encryption_failed"; goto cleanup;
     }
 
-    // Build the inner header plaintext: protobuf fields 1-3 only
-    // (ratchet_key, counter, previous_counter). Max 46 bytes.
-    unsigned char inner_header[64];
-    size_t inner_header_len =
-        dr_serialize_header(inner_header, state->dh_send_public, 32,
-                            state->send_message_number,
-                            state->prev_send_length);
+    // Inner header plaintext: protobuf fields 1-3 only (ratchet_key, counter,
+    // previous_counter). Max 46 bytes.
+    inner_header_len = dr_serialize_header(inner_header, state->dh_send_public, 32,
+                                           state->send_message_number,
+                                           state->prev_send_length);
 
     // Encrypt the inner header under the current send header_key with a
     // fresh random 16B IV. The wire form of enc_header is `iv || ciphertext`
-    // so the receiver can run AES-CBC-decrypt with each candidate
-    // header_key against the same IV during trial-decrypt. Reusing a static
-    // IV across messages in a chain would expose identical leading blocks
-    // (the inner header's first 16B are an invariant ratchet_key prefix).
-    unsigned char hcipher[32];
+    // so the receiver can run AES-CBC-decrypt with each candidate header_key
+    // against the same IV during trial-decrypt. Reusing a static IV across
+    // messages in a chain would expose identical leading blocks (the inner
+    // header's first 16B are an invariant ratchet_key prefix).
     if (dr_derive_header_cipher_key(hcipher, state->header_key_send) != 0) {
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(hcipher, sizeof(hcipher));
-        return "kdf_failed";
+        err = "kdf_failed"; goto cleanup;
     }
-    size_t enc_header_cap = 16 + inner_header_len + 16;
-    unsigned char *enc_header = enif_alloc(enc_header_cap);
-    if (!enc_header) {
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(hcipher, sizeof(hcipher));
-        return "memory_allocation_failed";
-    }
+    enc_header = enif_alloc(16 + inner_header_len + 16);
+    if (!enc_header) { err = "memory_allocation_failed"; goto cleanup; }
     randombytes_buf(enc_header, 16);  // random IV at the head
-    size_t header_ct_len = 0;
     if (dr_aes_cbc_encrypt(enc_header + 16, &header_ct_len,
                            inner_header, inner_header_len,
                            hcipher, enc_header) != 0) {
-        enif_free(enc_header);
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        sodium_memzero(hcipher, sizeof(hcipher));
-        return "encryption_failed";
+        err = "encryption_failed"; goto cleanup;
     }
-    size_t enc_header_len = 16 + header_ct_len;
-    sodium_memzero(hcipher, sizeof(hcipher));
-    sodium_memzero(inner_header, sizeof(inner_header));
+    enc_header_len = 16 + header_ct_len;
 
-    // Serialize the outer envelope protobuf:
-    //   {enc_header = 1, ciphertext = 2}.
+    // Outer envelope protobuf: {enc_header = 1, ciphertext = 2}.
     // Max overhead: 2 tags + 2 varints = 22 bytes.
-    size_t envelope_cap = 22 + enc_header_len + cbc_len;
-    unsigned char *envelope = enif_alloc(envelope_cap);
-    if (!envelope) {
-        enif_free(enc_header);
-        enif_free(cbc_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return "memory_allocation_failed";
-    }
-    size_t envelope_len = dr_serialize_envelope(envelope,
-                                                enc_header, enc_header_len,
-                                                cbc_buf, cbc_len);
-    enif_free(enc_header);
-    enif_free(cbc_buf);
+    envelope = enif_alloc(22 + enc_header_len + cbc_len);
+    if (!envelope) { err = "memory_allocation_failed"; goto cleanup; }
+    envelope_len = dr_serialize_envelope(envelope, enc_header, enc_header_len,
+                                         cbc_buf, cbc_len);
 
     // MAC over local_id_pub || remote_id_pub || version || envelope.
-    unsigned char mac[DR_MAC_LEN];
     if (dr_compute_mac(mac, mac_key,
                        state->local_identity_pub, state->remote_identity_pub,
                        DR_VERSION_BYTE, envelope, envelope_len) != 0) {
-        enif_free(envelope);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return "mac_failed";
+        err = "mac_failed"; goto cleanup;
     }
 
-    // Assemble the wire envelope: version(1) || envelope || mac(8).
-    size_t wire_len = 1 + envelope_len + DR_MAC_LEN;
-    unsigned char *wire = enif_alloc(wire_len);
-    if (!wire) {
-        enif_free(envelope);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(next_chain, sizeof(next_chain));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return "memory_allocation_failed";
-    }
+    // Wire envelope: version(1) || envelope || mac(8).
+    wire_len = 1 + envelope_len + DR_MAC_LEN;
+    wire = enif_alloc(wire_len);
+    if (!wire) { err = "memory_allocation_failed"; goto cleanup; }
     wire[0] = DR_VERSION_BYTE;
     memcpy(wire + 1, envelope, envelope_len);
     memcpy(wire + 1 + envelope_len, mac, DR_MAC_LEN);
-    enif_free(envelope);
 
-    // Advance state.
+    // Commit state and transfer wire to caller.
     memcpy(state->send_chain_key, next_chain, DR_CHAIN_KEY_SIZE);
     state->send_message_number++;
+    *out_wire = wire;
+    *out_wire_len = wire_len;
+    wire = NULL;  // ownership transferred; cleanup must not free
 
+cleanup:
     sodium_memzero(message_key, sizeof(message_key));
     sodium_memzero(next_chain, sizeof(next_chain));
     sodium_memzero(cipher_key, sizeof(cipher_key));
     sodium_memzero(mac_key, sizeof(mac_key));
     sodium_memzero(iv, sizeof(iv));
-
-    *out_wire = wire;
-    *out_wire_len = wire_len;
-    return NULL;
+    sodium_memzero(hcipher, sizeof(hcipher));
+    sodium_memzero(inner_header, sizeof(inner_header));
+    if (cbc_buf) enif_free(cbc_buf);
+    if (enc_header) enif_free(enc_header);
+    if (envelope) enif_free(envelope);
+    if (wire) enif_free(wire);
+    return err;
 }
 
 // Double Ratchet: Encrypt message.
