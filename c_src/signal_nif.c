@@ -324,15 +324,17 @@ static ERL_NIF_TERM aes_gcm_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                       plaintext.data, plaintext.size,
                                       aad.data, aad.size,
                                       NULL, iv.data, key.data) != 0) {
+        sodium_memzero(temp_buffer, ciphertext_len);
         free(temp_buffer);
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "encryption_failed"));
     }
-    
+
     // Split ciphertext and tag
     memcpy(ciphertext_data, temp_buffer, plaintext.size);
     memcpy(tag_data, temp_buffer + plaintext.size, crypto_aead_aes256gcm_ABYTES);
-    
+
+    sodium_memzero(temp_buffer, ciphertext_len);
     free(temp_buffer);
     return enif_make_tuple3(env, enif_make_atom(env, "ok"), ciphertext_term, tag_term);
 }
@@ -390,11 +392,13 @@ static ERL_NIF_TERM aes_gcm_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                       combined_buffer, combined_len,
                                       aad.data, aad.size,
                                       iv.data, key.data) != 0) {
+        sodium_memzero(combined_buffer, combined_len);
         free(combined_buffer);
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "decryption_failed"));
     }
-    
+
+    sodium_memzero(combined_buffer, combined_len);
     free(combined_buffer);
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), plaintext_term);
 }
