@@ -258,86 +258,72 @@ ERL_NIF_TERM process_pre_key_bundle_bob(ErlNifEnv *env, int argc, const ERL_NIF_
                                enif_make_atom(env, "invalid_remote_ephemeral_pub_size"));
     }
 
-    // Convert Bob's Ed25519 identity priv and Alice's Ed25519 identity pub
-    // to X25519 form for DH.
+    const char *err = NULL;
     unsigned char id_priv_x[crypto_box_SECRETKEYBYTES];
     unsigned char remote_id_pub_x[crypto_box_PUBLICKEYBYTES];
-    if (crypto_sign_ed25519_sk_to_curve25519(id_priv_x, id_priv.data) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "identity_priv_conversion_failed"));
-    }
-    if (crypto_sign_ed25519_pk_to_curve25519(remote_id_pub_x,
-                                             remote_id_pub.data) != 0) {
-        sodium_memzero(id_priv_x, sizeof(id_priv_x));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "identity_pub_conversion_failed"));
-    }
-
     unsigned char dh1[crypto_scalarmult_BYTES];
     unsigned char dh2[crypto_scalarmult_BYTES];
     unsigned char dh3[crypto_scalarmult_BYTES];
     unsigned char dh4[crypto_scalarmult_BYTES];
+    unsigned char km[128];
+    unsigned char session_key[96];
+    size_t km_size = 0;
+    ERL_NIF_TERM session_term = 0;
+
+    // Convert Bob's Ed25519 identity priv and Alice's Ed25519 identity pub
+    // to X25519 form for DH.
+    if (crypto_sign_ed25519_sk_to_curve25519(id_priv_x, id_priv.data) != 0) {
+        err = "identity_priv_conversion_failed"; goto cleanup;
+    }
+    if (crypto_sign_ed25519_pk_to_curve25519(remote_id_pub_x,
+                                             remote_id_pub.data) != 0) {
+        err = "identity_pub_conversion_failed"; goto cleanup;
+    }
 
     if (crypto_scalarmult(dh1, spk_priv.data, remote_id_pub_x) != 0) {
-        sodium_memzero(id_priv_x, sizeof(id_priv_x));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh1_calculation_failed"));
+        err = "dh1_calculation_failed"; goto cleanup;
     }
     if (crypto_scalarmult(dh2, id_priv_x, remote_eph_pub.data) != 0) {
-        sodium_memzero(id_priv_x, sizeof(id_priv_x));
-        sodium_memzero(dh1, sizeof(dh1));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh2_calculation_failed"));
+        err = "dh2_calculation_failed"; goto cleanup;
     }
     if (crypto_scalarmult(dh3, spk_priv.data, remote_eph_pub.data) != 0) {
-        sodium_memzero(id_priv_x, sizeof(id_priv_x));
-        sodium_memzero(dh1, sizeof(dh1));
-        sodium_memzero(dh2, sizeof(dh2));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh3_calculation_failed"));
+        err = "dh3_calculation_failed"; goto cleanup;
     }
     if (has_opk) {
         if (crypto_scalarmult(dh4, opk_priv.data, remote_eph_pub.data) != 0) {
-            sodium_memzero(id_priv_x, sizeof(id_priv_x));
-            sodium_memzero(dh1, sizeof(dh1));
-            sodium_memzero(dh2, sizeof(dh2));
-            sodium_memzero(dh3, sizeof(dh3));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "dh4_calculation_failed"));
+            err = "dh4_calculation_failed"; goto cleanup;
         }
     }
-    sodium_memzero(id_priv_x, sizeof(id_priv_x));
 
-    size_t km_size = has_opk ? 128 : 96;
-    unsigned char km[128];
+    km_size = has_opk ? 128 : 96;
     memcpy(km,      dh1, 32);
     memcpy(km + 32, dh2, 32);
     memcpy(km + 64, dh3, 32);
-    if (has_opk) {
-        memcpy(km + 96, dh4, 32);
-    }
+    if (has_opk) memcpy(km + 96, dh4, 32);
 
-    unsigned char session_key[96];
-    int kdf_rc = x3dh_derive_sk(km, km_size, session_key);
-    sodium_memzero(dh1, sizeof(dh1));
-    sodium_memzero(dh2, sizeof(dh2));
-    sodium_memzero(dh3, sizeof(dh3));
-    if (has_opk) {
-        sodium_memzero(dh4, sizeof(dh4));
-    }
-    sodium_memzero(km, sizeof(km));
-    if (kdf_rc != 0) {
-        sodium_memzero(session_key, sizeof(session_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "kdf_failed"));
+    if (x3dh_derive_sk(km, km_size, session_key) != 0) {
+        err = "kdf_failed"; goto cleanup;
     }
 
     // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
-    ERL_NIF_TERM session_term;
-    unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
-    memcpy(session_data, session_key, 96);
+    {
+        unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
+        memcpy(session_data, session_key, 96);
+    }
+
+cleanup:
+    sodium_memzero(id_priv_x, sizeof(id_priv_x));
+    sodium_memzero(dh1, sizeof(dh1));
+    sodium_memzero(dh2, sizeof(dh2));
+    sodium_memzero(dh3, sizeof(dh3));
+    sodium_memzero(dh4, sizeof(dh4));
+    sodium_memzero(km, sizeof(km));
     sodium_memzero(session_key, sizeof(session_key));
 
+    if (err) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), session_term);
 }
 
