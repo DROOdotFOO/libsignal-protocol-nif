@@ -444,7 +444,6 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 
     ErlNifBinary dr_session, ciphertext;
-
     if (!enif_inspect_binary(env, argv[0], &dr_session) ||
         !enif_inspect_binary(env, argv[1], &ciphertext)) {
         return enif_make_badarg(env);
@@ -455,23 +454,25 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                                enif_make_atom(env, "invalid_session_size"));
     }
 
+    const char *err = NULL;
     double_ratchet_state_t state;
+    unsigned char header_plain[64];
+    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
+    unsigned char cipher_key[32], mac_key[32], iv[16];
+    unsigned char expected_mac[DR_MAC_LEN];
+    unsigned char *pt_buf = NULL;
+    size_t plaintext_len = 0;
+    size_t body_ct_len = 0;
+    ERL_NIF_TERM decrypted_term = 0;
+
     memcpy(&state, dr_session.data, DR_STATE_SIZE);
 
-    if (!state.initialized) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "session_not_initialized"));
-    }
+    if (!state.initialized) { err = "session_not_initialized"; goto cleanup; }
 
     // Outer envelope: version(1) || protobuf || mac(8).
-    if (ciphertext.size < 1 + DR_MAC_LEN) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "message_too_short"));
-    }
-    if (ciphertext.data[0] != DR_VERSION_BYTE) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "unsupported_version"));
-    }
+    if (ciphertext.size < 1 + DR_MAC_LEN) { err = "message_too_short"; goto cleanup; }
+    if (ciphertext.data[0] != DR_VERSION_BYTE) { err = "unsupported_version"; goto cleanup; }
+
     size_t envelope_len = ciphertext.size - 1 - DR_MAC_LEN;
     const unsigned char *envelope = ciphertext.data + 1;
     const unsigned char *received_mac = ciphertext.data + 1 + envelope_len;
@@ -479,22 +480,18 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     const unsigned char *enc_header = NULL;
     size_t enc_header_len = 0;
     const unsigned char *body_ct = NULL;
-    size_t body_ct_len = 0;
     if (dr_parse_envelope(envelope, envelope_len,
                           &enc_header, &enc_header_len,
                           &body_ct, &body_ct_len) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "malformed_message"));
+        err = "malformed_message"; goto cleanup;
     }
     if (body_ct_len == 0 || (body_ct_len % 16) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "message_too_short"));
+        err = "message_too_short"; goto cleanup;
     }
 
     // Trial-decrypt enc_header under each candidate header_key.
     enum { PATH_CURRENT, PATH_RATCHET, PATH_SKIPPED } path = PATH_CURRENT;
     int matched_skipped_idx = -1;
-    unsigned char header_plain[64];
     size_t header_plain_len = 0;
     dr_message_t inner;
     int found = 0;
@@ -524,9 +521,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                     // Header decrypted under a chain's HK, but no cached
                     // message_key for that counter -- treat as malformed
                     // since we have nowhere to take this from.
-                    sodium_memzero(header_plain, sizeof(header_plain));
-                    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                           enif_make_atom(env, "bad_mac"));
+                    err = "bad_mac"; goto cleanup;
                 }
                 matched_skipped_idx = idx;
                 path = PATH_SKIPPED;
@@ -536,14 +531,9 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         }
     }
 
-    if (!found) {
-        sodium_memzero(header_plain, sizeof(header_plain));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "bad_mac"));
-    }
+    if (!found) { err = "bad_mac"; goto cleanup; }
 
     // Apply path-specific state advance and derive the message key.
-    unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     if (path == PATH_SKIPPED) {
         mkskipped_pop(&state, matched_skipped_idx, message_key);
     } else if (path == PATH_CURRENT) {
@@ -553,19 +543,12 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         // PATH_CURRENT trial-decrypt matched because the chain's HKr also
         // keys those cached entries.
         if (inner.counter < state.recv_message_number) {
-            int idx = mkskipped_find(&state, state.header_key_recv,
-                                     inner.counter);
-            if (idx < 0) {
-                sodium_memzero(header_plain, sizeof(header_plain));
-                return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                       enif_make_atom(env, "bad_mac"));
-            }
+            int idx = mkskipped_find(&state, state.header_key_recv, inner.counter);
+            if (idx < 0) { err = "bad_mac"; goto cleanup; }
             mkskipped_pop(&state, idx, message_key);
         } else {
             if (skip_message_keys(&state, inner.counter) != 0) {
-                sodium_memzero(header_plain, sizeof(header_plain));
-                return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                       enif_make_atom(env, "too_many_skipped"));
+                err = "too_many_skipped"; goto cleanup;
             }
             derive_message_key(message_key, state.recv_chain_key);
             advance_chain_key(state.recv_chain_key, state.recv_chain_key);
@@ -573,95 +556,69 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         }
     } else { // PATH_RATCHET
         if (skip_message_keys(&state, inner.previous_counter) != 0) {
-            sodium_memzero(header_plain, sizeof(header_plain));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "too_many_skipped"));
+            err = "too_many_skipped"; goto cleanup;
         }
         if (dh_ratchet_recv(&state, inner.ratchet_key) != 0) {
-            sodium_memzero(header_plain, sizeof(header_plain));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "dh_ratchet_failed"));
+            err = "dh_ratchet_failed"; goto cleanup;
         }
         if (skip_message_keys(&state, inner.counter) != 0) {
-            sodium_memzero(header_plain, sizeof(header_plain));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "too_many_skipped"));
+            err = "too_many_skipped"; goto cleanup;
         }
         derive_message_key(message_key, state.recv_chain_key);
         advance_chain_key(state.recv_chain_key, state.recv_chain_key);
         state.recv_message_number++;
     }
-    sodium_memzero(header_plain, sizeof(header_plain));
 
     // Derive per-message keys + verify MAC over the outer envelope.
     // MAC binding (Signal-spec swap on receive): peer was sender, so their
     // identity goes first.
-    unsigned char cipher_key[32], mac_key[32], iv[16];
     if (dr_derive_message_keys(cipher_key, mac_key, iv, message_key) != 0) {
-        sodium_memzero(message_key, sizeof(message_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "kdf_failed"));
+        err = "kdf_failed"; goto cleanup;
     }
-    unsigned char expected_mac[DR_MAC_LEN];
     if (dr_compute_mac(expected_mac, mac_key,
                        state.remote_identity_pub, state.local_identity_pub,
                        DR_VERSION_BYTE, envelope, envelope_len) != 0) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "mac_failed"));
+        err = "mac_failed"; goto cleanup;
     }
     if (CRYPTO_memcmp(expected_mac, received_mac, DR_MAC_LEN) != 0) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "bad_mac"));
+        err = "bad_mac"; goto cleanup;
     }
 
     // MAC OK -- decrypt body. PKCS#7 padding is validated by EVP_DecryptFinal;
     // the padding-oracle channel is closed since we already verified the MAC.
-    unsigned char *pt_buf = enif_alloc(body_ct_len);
-    if (!pt_buf) {
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "memory_allocation_failed"));
-    }
-    size_t plaintext_len = 0;
+    pt_buf = enif_alloc(body_ct_len);
+    if (!pt_buf) { err = "memory_allocation_failed"; goto cleanup; }
     if (dr_aes_cbc_decrypt(pt_buf, &plaintext_len,
                            body_ct, body_ct_len,
                            cipher_key, iv) != 0) {
-        enif_free(pt_buf);
-        sodium_memzero(message_key, sizeof(message_key));
-        sodium_memzero(cipher_key, sizeof(cipher_key));
-        sodium_memzero(mac_key, sizeof(mac_key));
-        sodium_memzero(iv, sizeof(iv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "decryption_failed"));
+        err = "decryption_failed"; goto cleanup;
     }
 
-    ERL_NIF_TERM decrypted_term;
-    unsigned char *decrypted_data =
-        enif_make_new_binary(env, plaintext_len, &decrypted_term);
-    memcpy(decrypted_data, pt_buf, plaintext_len);
-    sodium_memzero(pt_buf, body_ct_len);
-    enif_free(pt_buf);
+    {
+        unsigned char *decrypted_data =
+            enif_make_new_binary(env, plaintext_len, &decrypted_term);
+        memcpy(decrypted_data, pt_buf, plaintext_len);
+    }
+    sodium_memzero(pt_buf, body_ct_len);  // plaintext held briefly in pt_buf
+
+cleanup:
+    sodium_memzero(header_plain, sizeof(header_plain));
+    sodium_memzero(message_key, sizeof(message_key));
     sodium_memzero(cipher_key, sizeof(cipher_key));
     sodium_memzero(mac_key, sizeof(mac_key));
     sodium_memzero(iv, sizeof(iv));
+    if (pt_buf) enif_free(pt_buf);
+
+    if (err) {
+        sodium_memzero(&state, sizeof(state));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
 
     ERL_NIF_TERM updated_session_term;
     unsigned char *updated_session_data =
         enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
     memcpy(updated_session_data, &state, DR_STATE_SIZE);
-
-    sodium_memzero(message_key, sizeof(message_key));
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
