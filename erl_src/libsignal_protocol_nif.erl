@@ -20,6 +20,7 @@
 -on_load(load_nif/0).
 
 %% NIF loading functions
+-spec load_nif() -> ok | {error, term()}.
 load_nif() ->
     %% Prefer the OTP-app-resolved priv dir (works from anywhere the
     %% libsignal_protocol_nif beam is on the code path -- e.g. when the
@@ -57,21 +58,32 @@ load_nif_from_paths([Path | Rest]) ->
 %% These bodies only fire if a caller reaches them through a dev hot-reload
 %% without the NIF attached -- never in a production load path.
 
+-spec init() -> ok.
 init() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec generate_identity_key_pair() ->
+    {ok, {Ed25519Pub :: binary(), Ed25519Priv :: binary()}} | {error, atom()}.
 generate_identity_key_pair() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec generate_pre_key(KeyId :: non_neg_integer()) ->
+    {ok, {non_neg_integer(), X25519Pub :: binary()}} | {error, atom()}.
 generate_pre_key(_KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec generate_signed_pre_key(IdentityPriv :: binary(), KeyId :: non_neg_integer()) ->
+    {ok, {non_neg_integer(), SpkPub :: binary(), Signature :: binary()}} | {error, atom()}.
 generate_signed_pre_key(_IdentityKey, _KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec create_session(LocalPriv :: binary(), RemotePub :: binary()) ->
+    {ok, Session :: binary()} | {error, atom()}.
 create_session(_LocalKey, _RemoteKey) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec process_pre_key_bundle(LocalIdentityPriv :: binary(), Bundle :: binary()) ->
+    {ok, {SharedSecret :: binary(), EphemeralPub :: binary()}} | {error, atom()}.
 process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -84,13 +96,23 @@ process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
 %% RemoteEphemeralPub: 32B X25519 (Alice's ephemeral, returned by her
 %%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 96B
 %%   secret Alice derived (64B X3DH SK || 32B shared header-key seed for DR-HE).
+-spec process_pre_key_bundle_bob(IdentityPriv :: binary(),
+                                 SignedPreKeyPriv :: binary(),
+                                 OneTimePreKeyPriv :: binary(),
+                                 RemoteIdentityPub :: binary(),
+                                 RemoteEphemeralPub :: binary()) ->
+    {ok, SharedSecret :: binary()} | {error, atom()}.
 process_pre_key_bundle_bob(_IdentityPriv, _SignedPreKeyPriv, _OneTimePreKeyPriv,
                            _RemoteIdentityPub, _RemoteEphemeralPub) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec encrypt_message(Session :: binary(), Message :: binary()) ->
+    {ok, Encrypted :: binary()} | {error, atom()}.
 encrypt_message(_Session, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec decrypt_message(Session :: binary(), Encrypted :: binary()) ->
+    {ok, Plaintext :: binary()} | {error, atom()}.
 decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -107,10 +129,18 @@ decrypt_message(_Session, _EncryptedMessage) ->
 % For Bob:   SelfIdentityPriv is his 64B Ed25519 identity private key,
 %   converted to X25519 internally for the initial DH ratchet pair. Bob's
 %   encrypt fails until he receives Alice's first message.
+-spec dr_init(SharedSecret :: binary(),
+              LocalIdentityPub :: binary(),
+              RemoteIdentityPub :: binary(),
+              SelfIdentityPriv :: binary(),
+              IsAlice :: 0 | 1) ->
+    {ok, DrSession :: binary()} | {error, atom()}.
 dr_init(_SharedSecret, _LocalIdentityPub, _RemoteIdentityPub,
         _SelfIdentityPriv, _IsAlice) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec dr_encrypt(DrSession :: binary(), Message :: binary()) ->
+    {ok, {Ciphertext :: binary(), NewSession :: binary()}} | {error, atom()}.
 dr_encrypt(_DrSession, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -120,9 +150,19 @@ dr_encrypt(_DrSession, _Message) ->
 %%               AliceX3dhEphemeralPub}. AliceX3dhEphemeralPub is the 32B X25519
 %% pub returned by process_pre_key_bundle/2.
 %% Returns {ok, {PksmWireBytes, NewSession}} | {error, Atom}.
+-spec dr_encrypt_prekey(DrSession :: binary(),
+                        Message :: binary(),
+                        PreKeyInfo ::
+                            {RegistrationId :: non_neg_integer(),
+                             OneTimePreKeyId :: non_neg_integer() | undefined,
+                             SignedPreKeyId :: non_neg_integer(),
+                             AliceEphemeralPub :: binary()}) ->
+    {ok, {PksmWire :: binary(), NewSession :: binary()}} | {error, atom()}.
 dr_encrypt_prekey(_DrSession, _Message, _PreKeyInfo) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec dr_decrypt(DrSession :: binary(), Encrypted :: binary()) ->
+    {ok, {Plaintext :: binary(), NewSession :: binary()}} | {error, atom()}.
 dr_decrypt(_DrSession, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -133,6 +173,13 @@ dr_decrypt(_DrSession, _EncryptedMessage) ->
 %%   {ok, {RegistrationId, BaseKey, IdentityKey, OneTimePreKeyId | undefined,
 %%         SignedPreKeyId, InnerMessage}}
 %% | {error, malformed_message}.
+-spec pksm_decode(Wire :: binary()) ->
+    {ok, {RegistrationId :: non_neg_integer(),
+          BaseKey :: binary(),
+          IdentityKey :: binary(),
+          OneTimePreKeyId :: non_neg_integer() | undefined,
+          SignedPreKeyId :: non_neg_integer(),
+          InnerMessage :: binary()}} | {error, atom()}.
 pksm_decode(_Wire) ->
     erlang:nif_error(nif_not_loaded).
 

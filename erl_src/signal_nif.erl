@@ -19,45 +19,79 @@
     load_nif/0
 ]).
 
+-spec test_function() -> ok.
 test_function() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec test_crypto() -> crypto_ok.
 test_crypto() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec sha256(Data :: binary()) -> {ok, Hash :: binary()}.
 sha256(_Data) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec generate_curve25519_keypair() ->
+    {ok, {Pub :: binary(), Priv :: binary()}} | {error, atom()}.
 generate_curve25519_keypair() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec generate_ed25519_keypair() ->
+    {ok, {Pub :: binary(), PrivSeed :: binary()}} | {error, atom()}.
 generate_ed25519_keypair() ->
     erlang:nif_error(nif_not_loaded).
 
+-spec sign_data(PrivateKeySeed :: binary(), Message :: binary()) ->
+    {ok, Signature :: binary()} | {error, atom()}.
 sign_data(_PrivateKey, _Message) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec verify_signature(PublicKey :: binary(),
+                       Message :: binary(),
+                       Signature :: binary()) ->
+    ok | invalid_signature | {error, atom()}.
 verify_signature(_PublicKey, _Message, _Signature) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec ed25519_sk_to_curve25519(EdSecretKey :: binary()) ->
+    {ok, X25519Priv :: binary()} | {error, atom()}.
 ed25519_sk_to_curve25519(_EdSecretKey) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec ed25519_pk_to_curve25519(EdPublicKey :: binary()) ->
+    {ok, X25519Pub :: binary()} | {error, atom()}.
 ed25519_pk_to_curve25519(_EdPublicKey) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec sha512(Data :: binary()) -> {ok, Hash :: binary()}.
 sha512(_Data) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec hmac_sha256(Key :: binary(), Data :: binary()) ->
+    {ok, Mac :: binary()} | {error, atom()}.
 hmac_sha256(_Key, _Data) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec aes_gcm_encrypt(Key :: binary(),
+                      IV :: binary(),
+                      Plaintext :: binary(),
+                      AAD :: binary(),
+                      TagLen :: non_neg_integer()) ->
+    {ok, Ciphertext :: binary(), Tag :: binary()} | {error, atom()}.
 aes_gcm_encrypt(_Key, _IV, _Plaintext, _AAD, _TagLen) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec aes_gcm_decrypt(Key :: binary(),
+                      IV :: binary(),
+                      Ciphertext :: binary(),
+                      AAD :: binary(),
+                      Tag :: binary(),
+                      PlaintextLen :: non_neg_integer()) ->
+    {ok, Plaintext :: binary()} | {error, atom()}.
 aes_gcm_decrypt(_Key, _IV, _Ciphertext, _AAD, _Tag, _PlaintextLen) ->
     erlang:nif_error(nif_not_loaded).
 
+-spec load_nif() -> ok | {error, term() | string()}.
 load_nif() ->
     % Try multiple possible paths for the NIF library
     % Including paths that work in rebar3 test environments
