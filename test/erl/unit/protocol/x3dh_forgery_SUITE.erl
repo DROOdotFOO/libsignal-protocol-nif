@@ -19,13 +19,7 @@ all() ->
     [hmac_forgery_rejected, garbage_signature_rejected].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, {73, 79, 83}),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {73, 79, 83}).
 
 end_per_suite(_Config) ->
     ok.

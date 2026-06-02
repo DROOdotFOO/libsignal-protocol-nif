@@ -29,13 +29,7 @@ all() ->
      random_trials].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, {61, 67, 71}),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {61, 67, 71}).
 
 end_per_suite(_Config) ->
     ok.

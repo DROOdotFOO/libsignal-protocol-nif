@@ -25,24 +25,13 @@ all() ->
      malformed_outer_envelope_rejected].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, {2, 3, 5}),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {2, 3, 5}).
 
 end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(_Name, Config) ->
-    {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    SS = rand:bytes(96),
-    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
-    [{alice, Alice}, {bob, Bob} | Config].
+    dr_test_helpers:fresh_dr_parties_to_config(Config).
 
 %% ============================================================================
 %% Tests

@@ -30,13 +30,7 @@ all() ->
      bob_x3dh_matches_alice].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, {89, 97, 101}),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {89, 97, 101}).
 
 end_per_suite(_Config) ->
     ok.

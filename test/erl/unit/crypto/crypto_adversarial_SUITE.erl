@@ -33,13 +33,7 @@ all() ->
      adv_hmac_empty_key].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, ?SEED),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, ?SEED).
 
 end_per_suite(_Config) ->
     ok.

@@ -37,13 +37,7 @@ all() ->
      cross_session_isolation].
 
 init_per_suite(Config) ->
-    rand:seed(exsss, ?SEED),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, ?SEED).
 
 end_per_suite(_Config) ->
     ok.
@@ -60,7 +54,7 @@ roundtrip_random_plaintexts(_Config) ->
     ok.
 
 run_roundtrip_trial(N) ->
-    {Alice, Bob} = fresh_pair(),
+    {Alice, Bob} = dr_test_helpers:fresh_dr_parties(),
     PT = random_plaintext(),
     {ok, {CT, _Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice, PT),
     {ok, {Got, _Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, CT),
@@ -75,7 +69,7 @@ bidirectional_pingpong_random_rounds(_Config) ->
     ok.
 
 run_pingpong_trial(N) ->
-    {Alice0, Bob0} = fresh_pair(),
+    {Alice0, Bob0} = dr_test_helpers:fresh_dr_parties(),
     K = rand:uniform(?PINGPONG_MAX_ROUNDS),
     %% Each round: Alice -> Bob, then Bob -> Alice. K rounds total.
     Final =
@@ -106,7 +100,7 @@ random_reorder_within_chain(_Config) ->
     ok.
 
 run_reorder_trial(N) ->
-    {Alice0, Bob0} = fresh_pair(),
+    {Alice0, Bob0} = dr_test_helpers:fresh_dr_parties(),
     KSpan = ?REORDER_MAX_CHAIN - ?REORDER_MIN_CHAIN + 1,
     K = ?REORDER_MIN_CHAIN + rand:uniform(KSpan) - 1,
     %% Alice sends K messages, all in the same chain.
@@ -149,8 +143,8 @@ cross_session_isolation(_Config) ->
     ok.
 
 run_isolation_trial(N) ->
-    {AliceA, _BobA} = fresh_pair(),
-    {AliceB, BobB} = fresh_pair(),
+    {AliceA, _BobA} = dr_test_helpers:fresh_dr_parties(),
+    {AliceB, BobB} = dr_test_helpers:fresh_dr_parties(),
     BobBWarm = warm_up(AliceB, BobB, N),
     PT = random_plaintext(),
     {ok, {CT, _AliceA1}} = libsignal_protocol_nif:dr_encrypt(AliceA, PT),
@@ -185,14 +179,6 @@ warm_up(AliceB, BobB, _N) ->
 shuffle(List) ->
     Tagged = [{rand:uniform(), X} || X <- List],
     [X || {_, X} <- lists:sort(Tagged)].
-
-fresh_pair() ->
-    {ok, {AlicePub, _}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    SS = rand:bytes(96),
-    {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
-    {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
-    {Alice, Bob}.
 
 random_plaintext() ->
     rand:bytes(rand:uniform(?MAX_PLAINTEXT_BYTES + 1) - 1).
