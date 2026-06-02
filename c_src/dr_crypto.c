@@ -192,8 +192,7 @@ int dr_try_decrypt_header(unsigned char *out_plain,
 
     // Reject false positives: the decrypted bytes must parse as the inner
     // header protobuf (fields 1-3 only; no payload field) with a 32B
-    // ratchet_key. Reusing dr_parse_message here would require field 4 too,
-    // so parse fields 1-3 manually.
+    // ratchet_key.
     memset(out_msg, 0, sizeof(*out_msg));
     size_t pos = 0;
     while (pos < pt_len) {

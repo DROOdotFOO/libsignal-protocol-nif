@@ -32,11 +32,6 @@ size_t dr_serialize_header(unsigned char *out,
                            uint32_t counter,
                            uint32_t previous_counter);
 
-// Parse a serialized DrMessage. Pointers in `out` reference the input buffer
-// (no copies). Returns 0 on success, -1 on any malformation.
-int dr_parse_message(const unsigned char *in, size_t in_len,
-                     dr_message_t *out);
-
 // Serialize the outer DrEnvelope: {enc_header=1, ciphertext=2}.
 // Returns bytes written.
 // out must have capacity >= 2 + 2*10 + enc_header_len + ciphertext_len.

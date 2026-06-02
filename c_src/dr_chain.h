@@ -28,12 +28,6 @@ void mkskipped_pop(double_ratchet_state_t *state, int index,
 int skip_message_keys(double_ratchet_state_t *state,
                       unsigned int until);
 
-// DH ratchet step. Currently unused at the top level (dr_init inlines
-// Alice's initial send ratchet, and dh_ratchet_recv covers receive-side).
-// Kept as the canonical "send-side step 2" implementation.
-int dh_ratchet(double_ratchet_state_t *state,
-               const unsigned char *remote_public_key);
-
 // Double Ratchet receive-side ratchet step (Signal DR spec section 3.5).
 // Performs two KDF passes: first deriving new recv_chain_key, then generating
 // a fresh keypair and deriving new send_chain_key.

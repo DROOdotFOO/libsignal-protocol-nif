@@ -108,50 +108,13 @@ int skip_message_keys(double_ratchet_state_t *state,
     return 0;
 }
 
-int dh_ratchet(double_ratchet_state_t *state,
-               const unsigned char *remote_public_key) {
-    if (crypto_box_keypair(state->dh_send_public, state->dh_send_private) != 0) {
-        return -1;
-    }
-
-    // Perform raw X25519 DH with remote public key (Signal DR spec).
-    unsigned char dh_output[crypto_scalarmult_BYTES];
-    if (crypto_scalarmult(dh_output, state->dh_send_private, remote_public_key) != 0) {
-        return -1;
-    }
-
-    // KDF_RK_HE: 96B output = root(32) || send_chain(32) || NHKs(32).
-    unsigned char kdf_output[96];
-    if (hkdf_sha256(kdf_output, 96, state->root_key, 32, dh_output, 32,
-                    (const unsigned char *)"DR-RK", 5) != 0) {
-        sodium_memzero(dh_output, sizeof(dh_output));
-        return -1;
-    }
-
-    // Rotate header keys for the send direction, then apply new KDF outputs.
-    memcpy(state->header_key_send, state->next_header_key_send, 32);
-    memcpy(state->root_key, kdf_output, 32);
-    memcpy(state->send_chain_key, kdf_output + 32, 32);
-    memcpy(state->next_header_key_send, kdf_output + 64, 32);
-    memcpy(state->dh_recv_public, remote_public_key, crypto_box_PUBLICKEYBYTES);
-
-    state->prev_send_length = state->send_message_number;
-    state->send_message_number = 0;
-
-    sodium_memzero(dh_output, sizeof(dh_output));
-    sodium_memzero(kdf_output, sizeof(kdf_output));
-
-    return 0;
-}
-
 // Double Ratchet receive-side ratchet step (per Signal DR spec section 3.5).
 // Two KDF passes from the same DH inputs:
 //   1. Derive new recv_chain_key from KDF(root, DH(my_current_priv, their_new_pub))
 //   2. Generate a fresh keypair and derive new send_chain_key from
 //      KDF(new_root, DH(my_new_priv, their_new_pub))
-// dh_ratchet() above only does step 2, which is correct for Alice's initial
-// send setup but wrong for any receive-triggered ratchet -- the receiver must
-// derive recv_chain_key first or decryption fails.
+// Alice's initial send ratchet is inlined directly into dr_init (no recv
+// chain to derive there); this function covers every later DH step.
 int dh_ratchet_recv(double_ratchet_state_t *state,
                     const unsigned char *remote_public_key) {
     unsigned char dh_output[crypto_scalarmult_BYTES];
