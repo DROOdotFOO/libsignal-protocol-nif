@@ -11,7 +11,7 @@ fn setup_parties() {
   // X25519 for the DH ratchet and for the MAC binding.
   let assert Ok(alice_keys) = signal_protocol.generate_identity_key_pair()
   let assert Ok(bob_keys) = signal_protocol.generate_identity_key_pair()
-  let shared_secret = strong_rand_bytes(64)
+  let shared_secret = strong_rand_bytes(96)
   let assert Ok(alice) =
     signal_protocol.init_double_ratchet(
       shared_secret,

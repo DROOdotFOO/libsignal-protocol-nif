@@ -42,8 +42,9 @@ defmodule SignalProtocol do
   end
 
   @doc """
-  Bob's side of X3DH. Recovers the same 64-byte shared secret Alice derived
-  via `process_pre_key_bundle/2`.
+  Bob's side of X3DH. Recovers the same 96-byte shared secret Alice derived
+  via `process_pre_key_bundle/2` (64B X3DH SK || 32B shared header-key seed
+  for DR-HE).
 
   Inputs:
     * `identity_priv` - Bob's 64-byte Ed25519 identity private key.

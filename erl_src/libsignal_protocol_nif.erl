@@ -86,8 +86,8 @@ process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
 %% OneTimePreKeyPriv: 32B X25519 secret or <<>> if no OPK was used.
 %% RemoteIdentityPub: 32B Ed25519 (Alice's identity pub).
 %% RemoteEphemeralPub: 32B X25519 (Alice's ephemeral, returned by her
-%%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 64B
-%%   SK Alice derived.
+%%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 96B
+%%   secret Alice derived (64B X3DH SK || 32B shared header-key seed for DR-HE).
 process_pre_key_bundle_bob(_IdentityPriv, _SignedPreKeyPriv, _OneTimePreKeyPriv,
                            _RemoteIdentityPub, _RemoteEphemeralPub) ->
     erlang:nif_error(nif_not_loaded).

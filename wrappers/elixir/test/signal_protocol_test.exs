@@ -34,7 +34,7 @@ defmodule SignalProtocolTest do
 
     assert {:ok, {shared_secret, ephemeral_pub}} =
              SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
-    assert byte_size(shared_secret) == 64
+    assert byte_size(shared_secret) == 96
     assert byte_size(ephemeral_pub) == 32
   end
 
@@ -42,7 +42,7 @@ defmodule SignalProtocolTest do
     setup do
       {:ok, {alice_pub, _alice_priv}} = SignalProtocol.generate_identity_key_pair()
       {:ok, {bob_pub, bob_priv}} = SignalProtocol.generate_identity_key_pair()
-      shared_secret = :crypto.strong_rand_bytes(64)
+      shared_secret = :crypto.strong_rand_bytes(96)
 
       {:ok, alice} =
         SignalProtocol.init_double_ratchet(shared_secret, alice_pub, bob_pub, <<>>, 1)

@@ -1,9 +1,10 @@
 -module(x3dh_dr_compose_SUITE).
 
 %% Verifies that process_pre_key_bundle (X3DH from Alice's side) composes
-%% correctly with init_double_ratchet: the 64-byte secret Alice gets from
-%% X3DH is a valid root seed for a Double Ratchet session, and Alice + Bob
-%% can exchange messages once both initialize DR with that secret.
+%% correctly with init_double_ratchet: the 96-byte secret Alice gets from
+%% X3DH (64B SK || 32B shared header key for DR-HE) is a valid root seed
+%% for a Double Ratchet session, and Alice + Bob can exchange messages
+%% once both initialize DR with that secret.
 %%
 %% Now that the NIF uses raw X25519 (crypto_scalarmult, no HSalsa20 post-mix),
 %% Bob-side reconstruction is testable in Erlang via crypto:compute_key/4.
@@ -18,11 +19,11 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
--export([x3dh_returns_64_byte_secret/1, dr_handshake_after_x3dh/1,
+-export([x3dh_returns_96_byte_secret/1, dr_handshake_after_x3dh/1,
          bob_side_x3dh_matches/1, random_trials/1]).
 
 all() ->
-    [x3dh_returns_64_byte_secret,
+    [x3dh_returns_96_byte_secret,
      dr_handshake_after_x3dh,
      bob_side_x3dh_matches,
      random_trials].
@@ -89,11 +90,11 @@ hkdf_expand(PRK, Info, Length, Counter, TPrev, Acc) ->
 %% Tests
 %% ============================================================================
 
-x3dh_returns_64_byte_secret(_Config) ->
+x3dh_returns_96_byte_secret(_Config) ->
     {ok, {_, AliceIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {Bundle, _BobIdPub, _BobIdPriv} = build_bundle(),
     {ok, {SS, EphPub}} = libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, Bundle),
-    ?assertEqual(64, byte_size(SS)),
+    ?assertEqual(96, byte_size(SS)),
     ?assertEqual(32, byte_size(EphPub)).
 
 dr_handshake_after_x3dh(_Config) ->
@@ -133,7 +134,7 @@ bob_side_x3dh_matches(_Config) ->
 
     F = binary:copy(<<16#FF>>, 32),
     IKM = <<F/binary, DH1/binary, DH2/binary, DH3/binary>>,
-    BobSK = hkdf_sha256(IKM, <<>>, <<"X3DH-Signal">>, 64),
+    BobSK = hkdf_sha256(IKM, <<>>, <<"X3DH-Signal">>, 96),
 
     ?assertEqual(AliceSK, BobSK).
 

@@ -9,7 +9,7 @@
 %%   3. dr_encrypt_prekey/3 -> PKSM-wrapped first message
 %% Bob's side:
 %%   1. pksm_decode/1 -> Alice's identity + ephemeral + spk/opk ids + inner DR
-%%   2. process_pre_key_bundle_bob/5 -> SK (same 64B Alice derived)
+%%   2. process_pre_key_bundle_bob/5 -> SK (same 96B Alice derived)
 %%   3. init_double_ratchet/5 (as Bob)
 %%   4. dr_decrypt/2 on the inner DR message
 %%

@@ -17,9 +17,12 @@
 #define MAX_SKIPPED_KEYS 32
 #define MAX_SKIP 32
 
-// Skipped message-key cache entry. Indexed by (dh_pub, message_number).
+// Skipped message-key cache entry. Indexed by (header_key, message_number).
+// With DR-HE the receiver cannot see dh_pub or message_number until the
+// header decrypts, so cached entries are looked up by trial-decrypting the
+// envelope's enc_header against each occupied slot's header_key.
 typedef struct {
-    unsigned char dh_pub[32];
+    unsigned char header_key[DR_HEADER_KEY_SIZE];
     unsigned int message_number;
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     unsigned int lru_counter;  // higher = more recent; 0 == unoccupied sentinel
@@ -50,6 +53,15 @@ typedef struct {
     // them in state avoids passing them on every encrypt/decrypt.
     unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
     unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
+
+    // DR-HE (header encryption) keys. HKs/HKr authenticate+encrypt the
+    // current chain's headers; NHKs/NHKr are pre-derived for the *next*
+    // DH ratchet step and rotate into HKs/HKr at that step. Seeded from
+    // X3DH at dr_init; not yet consumed on the wire (state plumbing only).
+    unsigned char header_key_send[DR_HEADER_KEY_SIZE];
+    unsigned char header_key_recv[DR_HEADER_KEY_SIZE];
+    unsigned char next_header_key_send[DR_HEADER_KEY_SIZE];
+    unsigned char next_header_key_recv[DR_HEADER_KEY_SIZE];
 
     // Previous sending chain length (for header)
     unsigned int prev_send_length;

@@ -34,7 +34,7 @@ end_per_suite(_Config) ->
 init_per_testcase(_Name, Config) ->
     {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    SS = rand:bytes(64),
+    SS = rand:bytes(96),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
     {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
     [{alice, Alice}, {bob, Bob} | Config].
@@ -127,7 +127,7 @@ random_permutations_property(_Config) ->
 run_perm_trial(N) ->
     {ok, {AlicePub, _AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    SS = rand:bytes(64),
+    SS = rand:bytes(96),
     {ok, Alice} = libsignal_protocol_nif:init_double_ratchet(SS, AlicePub, BobPub, <<>>, 1),
     {ok, Bob} = libsignal_protocol_nif:init_double_ratchet(SS, BobPub, AlicePub, BobPriv, 0),
     {_AliceN, Items} = alice_sends(Alice, N),

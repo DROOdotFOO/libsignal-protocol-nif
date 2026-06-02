@@ -140,8 +140,9 @@ pub fn generate_signed_pre_key(
 
 /// Performs X3DH key agreement against a remote pre-key bundle.
 ///
-/// Returns `#(shared_secret, ephemeral_pub)` where the 64-byte shared secret
-/// is suitable to feed into `init_double_ratchet` as the DR root seed.
+/// Returns `#(shared_secret, ephemeral_pub)` where the 96-byte shared secret
+/// (64B X3DH SK || 32B DR-HE shared header-key seed) is suitable to feed
+/// into `init_double_ratchet` as the DR root seed.
 pub fn process_pre_key_bundle(
   local_identity_priv: BitArray,
   bundle: PreKeyBundle,
@@ -168,7 +169,7 @@ fn encode_bundle(bundle: PreKeyBundle) -> BitArray {
 
 /// Initialize a Double Ratchet session.
 ///
-/// `shared_secret` must be 64 bytes (typically the X3DH output).
+/// `shared_secret` must be 96 bytes (typically the X3DH output).
 /// `local_identity_pub` and `remote_identity_pub` are 32-byte Ed25519 pubs;
 /// both are stored in DR state and folded into every message MAC (Signal
 /// spec: HMAC scope is `sender_id || receiver_id || version || message`).
@@ -255,8 +256,9 @@ pub type PksmMessage {
   )
 }
 
-/// Bob's side of X3DH. Returns the same 64-byte shared secret Alice
-/// derives from `process_pre_key_bundle`.
+/// Bob's side of X3DH. Returns the same 96-byte shared secret Alice
+/// derives from `process_pre_key_bundle` (64B X3DH SK || 32B DR-HE shared
+/// header-key seed).
 ///
 /// Pass an empty `BitArray` for `one_time_pre_key_priv` when no OPK is
 /// being used.
