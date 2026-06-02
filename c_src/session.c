@@ -116,29 +116,33 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                enif_make_atom(env, "signature_verification_failed"));
     }
 
-    // For X25519 DH operations we need the curve forms of the identity keys.
+    const char *err = NULL;
     unsigned char local_x_priv[crypto_box_SECRETKEYBYTES];
     unsigned char remote_x_id_pub[crypto_box_PUBLICKEYBYTES];
+    unsigned char ephemeral_public_key[crypto_box_PUBLICKEYBYTES];
+    unsigned char ephemeral_private_key[crypto_box_SECRETKEYBYTES];
+    unsigned char dh1[crypto_scalarmult_BYTES];
+    unsigned char dh2[crypto_scalarmult_BYTES];
+    unsigned char dh3[crypto_scalarmult_BYTES];
+    unsigned char dh4[crypto_scalarmult_BYTES];
+    unsigned char session_key[96];
+    unsigned char *km = NULL;
+    size_t km_size = 0;
+    ERL_NIF_TERM session_term = 0;
+    ERL_NIF_TERM ephemeral_pub_term = 0;
+
+    // For X25519 DH operations we need the curve forms of the identity keys.
     if (crypto_sign_ed25519_sk_to_curve25519(local_x_priv,
                                              local_identity_priv.data) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "identity_priv_conversion_failed"));
+        err = "identity_priv_conversion_failed"; goto cleanup;
     }
     if (crypto_sign_ed25519_pk_to_curve25519(remote_x_id_pub,
                                              remote_ed_id_pub) != 0) {
-        sodium_memzero(local_x_priv, sizeof(local_x_priv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "identity_pub_conversion_failed"));
+        err = "identity_pub_conversion_failed"; goto cleanup;
     }
 
-    // Generate ephemeral key pair for this X3DH exchange.
-    unsigned char ephemeral_public_key[crypto_box_PUBLICKEYBYTES];
-    unsigned char ephemeral_private_key[crypto_box_SECRETKEYBYTES];
-
     if (crypto_box_keypair(ephemeral_public_key, ephemeral_private_key) != 0) {
-        sodium_memzero(local_x_priv, sizeof(local_x_priv));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "ephemeral_key_generation_failed"));
+        err = "ephemeral_key_generation_failed"; goto cleanup;
     }
 
     // X3DH (Signal spec §3.3, Alice's side):
@@ -148,100 +152,59 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     //   DH4 = DH(EK_A, OPK_B)  (if present)
     // Raw X25519 (crypto_scalarmult) -- Signal spec output, not the
     // HSalsa20-of-X25519 form that crypto_box_beforenm produces.
-    unsigned char dh1[crypto_scalarmult_BYTES];
-    unsigned char dh2[crypto_scalarmult_BYTES];
-    unsigned char dh3[crypto_scalarmult_BYTES];
-    unsigned char dh4[crypto_scalarmult_BYTES];
-
     if (crypto_scalarmult(dh1, local_x_priv, signed_prekey) != 0) {
-        sodium_memzero(local_x_priv, sizeof(local_x_priv));
-        sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh1_calculation_failed"));
+        err = "dh1_calculation_failed"; goto cleanup;
     }
-
     if (crypto_scalarmult(dh2, ephemeral_private_key, remote_x_id_pub) != 0) {
-        sodium_memzero(local_x_priv, sizeof(local_x_priv));
-        sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        sodium_memzero(dh1, sizeof(dh1));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh2_calculation_failed"));
+        err = "dh2_calculation_failed"; goto cleanup;
     }
-
     if (crypto_scalarmult(dh3, ephemeral_private_key, signed_prekey) != 0) {
-        sodium_memzero(local_x_priv, sizeof(local_x_priv));
-        sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        sodium_memzero(dh1, sizeof(dh1));
-        sodium_memzero(dh2, sizeof(dh2));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "dh3_calculation_failed"));
+        err = "dh3_calculation_failed"; goto cleanup;
     }
-
     if (has_one_time_prekey) {
         if (crypto_scalarmult(dh4, ephemeral_private_key, one_time_prekey) != 0) {
-            sodium_memzero(local_x_priv, sizeof(local_x_priv));
-            sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-            sodium_memzero(dh1, sizeof(dh1));
-            sodium_memzero(dh2, sizeof(dh2));
-            sodium_memzero(dh3, sizeof(dh3));
-            return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "dh4_calculation_failed"));
+            err = "dh4_calculation_failed"; goto cleanup;
         }
     }
-    sodium_memzero(local_x_priv, sizeof(local_x_priv));
-    
-    // Concatenate DH outputs for KDF input
-    // KM = DH1 || DH2 || DH3 || DH4 (if present)
-    size_t km_size = has_one_time_prekey ? 128 : 96; // 4*32 or 3*32 bytes
-    unsigned char *km = malloc(km_size);
-    if (!km) {
-        sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        sodium_memzero(dh1, sizeof(dh1));
-        sodium_memzero(dh2, sizeof(dh2));
-        sodium_memzero(dh3, sizeof(dh3));
-        if (has_one_time_prekey) {
-            sodium_memzero(dh4, sizeof(dh4));
-        }
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "memory_allocation_failed"));
-    }
-    
+
+    // KM = DH1 || DH2 || DH3 [|| DH4]
+    km_size = has_one_time_prekey ? 128 : 96;
+    km = malloc(km_size);
+    if (!km) { err = "memory_allocation_failed"; goto cleanup; }
     memcpy(km, dh1, 32);
     memcpy(km + 32, dh2, 32);
     memcpy(km + 64, dh3, 32);
-    if (has_one_time_prekey) {
-        memcpy(km + 96, dh4, 32);
+    if (has_one_time_prekey) memcpy(km + 96, dh4, 32);
+
+    if (x3dh_derive_sk(km, km_size, session_key) != 0) {
+        err = "kdf_failed"; goto cleanup;
     }
-    
-    unsigned char session_key[96];
-    int kdf_rc = x3dh_derive_sk(km, km_size, session_key);
-    free(km);
+
+    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
+    {
+        unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
+        unsigned char *ephemeral_pub_data = enif_make_new_binary(env, 32, &ephemeral_pub_term);
+        memcpy(session_data, session_key, 96);
+        memcpy(ephemeral_pub_data, ephemeral_public_key, 32);
+    }
+
+cleanup:
+    sodium_memzero(local_x_priv, sizeof(local_x_priv));
+    sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
     sodium_memzero(dh1, sizeof(dh1));
     sodium_memzero(dh2, sizeof(dh2));
     sodium_memzero(dh3, sizeof(dh3));
-    if (has_one_time_prekey) {
-        sodium_memzero(dh4, sizeof(dh4));
-    }
-    if (kdf_rc != 0) {
-        sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
-        sodium_memzero(session_key, sizeof(session_key));
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "kdf_failed"));
-    }
-
-    // Create return tuple with session key and ephemeral public key.
-    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
-    ERL_NIF_TERM session_term, ephemeral_pub_term;
-    unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
-    unsigned char *ephemeral_pub_data = enif_make_new_binary(env, 32, &ephemeral_pub_term);
-
-    memcpy(session_data, session_key, 96);
-    memcpy(ephemeral_pub_data, ephemeral_public_key, 32);
-
-    sodium_memzero(ephemeral_private_key, sizeof(ephemeral_private_key));
+    sodium_memzero(dh4, sizeof(dh4));
     sodium_memzero(session_key, sizeof(session_key));
+    if (km) {
+        sodium_memzero(km, km_size);
+        free(km);
+    }
 
-    // Return {ok, {SessionKey, EphemeralPublicKey}}
+    if (err) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
                            enif_make_tuple2(env, session_term, ephemeral_pub_term));
 }
