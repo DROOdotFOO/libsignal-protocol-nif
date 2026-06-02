@@ -25,7 +25,20 @@
 
 %% NIF loading functions
 load_nif() ->
-    Paths = ["../priv/libsignal_protocol_nif", "priv/libsignal_protocol_nif", "./priv/libsignal_protocol_nif"],
+    %% Prefer the OTP-app-resolved priv dir (works from anywhere the
+    %% libsignal_protocol_nif beam is on the code path -- e.g. when the
+    %% Elixir/Gleam wrappers add this project's _build/default/lib/.../ebin
+    %% to their own code path for tests). Fall back to relative paths for
+    %% the rebar3-direct workflow where CWD is the project root.
+    AppPath =
+        case code:priv_dir(libsignal_protocol_nif) of
+            {error, _} -> [];
+            Dir -> [filename:join(Dir, "libsignal_protocol_nif")]
+        end,
+    Paths = AppPath ++
+            ["../priv/libsignal_protocol_nif",
+             "priv/libsignal_protocol_nif",
+             "./priv/libsignal_protocol_nif"],
     load_nif_from_paths(Paths).
 
 load_nif_from_paths([]) ->

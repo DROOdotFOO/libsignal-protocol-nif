@@ -71,4 +71,59 @@ defmodule SignalProtocolTest do
       {:ok, {"hi alice", _alice2}} = SignalProtocol.dr_decrypt_message(alice, ct_b2a)
     end
   end
+
+  describe "PreKeySignalMessage end-to-end" do
+    test "Alice -> Bob first message via PKSM, without OPK" do
+      {:ok, {alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
+      {:ok, {bob_pub, bob_priv}} = SignalProtocol.generate_identity_key_pair()
+
+      # Mint Bob's SPK ourselves so we retain the private half.
+      {:ok, {spk_pub, spk_priv}} = :signal_nif.generate_curve25519_keypair()
+      bob_seed = binary_part(bob_priv, 0, 32)
+      {:ok, signature} = :signal_nif.sign_data(bob_seed, spk_pub)
+      bundle = bob_pub <> spk_pub <> signature
+
+      {:ok, {sk, alice_eph_pub}} =
+        SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
+
+      {:ok, alice_dr} =
+        SignalProtocol.init_double_ratchet(sk, alice_pub, bob_pub, <<>>, 1)
+
+      plaintext = "first contact"
+
+      {:ok, {wire, _alice_dr2}} =
+        SignalProtocol.dr_encrypt_prekey(
+          alice_dr,
+          plaintext,
+          {1234, nil, 42, alice_eph_pub}
+        )
+
+      # Bob parses and recovers the SK.
+      {:ok, {1234, ^alice_eph_pub, _id_key_x, nil, 42, inner}} =
+        SignalProtocol.pksm_decode(wire)
+
+      {:ok, ^sk} =
+        SignalProtocol.process_pre_key_bundle_bob(
+          bob_priv,
+          spk_priv,
+          <<>>,
+          alice_pub,
+          alice_eph_pub
+        )
+
+      {:ok, bob_dr} =
+        SignalProtocol.init_double_ratchet(sk, bob_pub, alice_pub, bob_priv, 0)
+
+      assert {:ok, {^plaintext, _bob_dr2}} =
+               SignalProtocol.dr_decrypt_message(bob_dr, inner)
+    end
+
+    test "pksm_decode returns {:error, :malformed_message} on garbage" do
+      assert {:error, :malformed_message} =
+               SignalProtocol.pksm_decode(<<0x22, 1, 2, 3>>)
+
+      assert {:error, :malformed_message} =
+               SignalProtocol.pksm_decode(<<>>)
+    end
+  end
 end

@@ -7,8 +7,8 @@
 #include <stdbool.h>
 #include <sodium.h>
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 #include <openssl/crypto.h>
+#include <openssl/params.h>
 #include "dr.h"
 #include "pksm.h"
 
@@ -289,6 +289,7 @@ done:
 // Compute the Signal-spec MAC: HMAC-SHA-256(mac_key, sender_id_pub(32) ||
 // receiver_id_pub(32) || version(1) || serialized_message), truncated to the
 // first 8 bytes (DR_MAC_LEN). Output buffer must be DR_MAC_LEN bytes.
+// Uses the OpenSSL 3 EVP_MAC API; the legacy HMAC_* interface is deprecated.
 static int dr_compute_mac(unsigned char *out_mac,
                           const unsigned char *mac_key,
                           const unsigned char *sender_id_pub,
@@ -296,21 +297,30 @@ static int dr_compute_mac(unsigned char *out_mac,
                           unsigned char version,
                           const unsigned char *serialized, size_t serialized_len) {
     unsigned char full_mac[32];
-    unsigned int full_mac_len = 0;
-    HMAC_CTX *ctx = HMAC_CTX_new();
-    if (!ctx) return -1;
+    size_t full_mac_len = 0;
+    EVP_MAC *mac_algo = EVP_MAC_fetch(NULL, "HMAC", NULL);
+    if (!mac_algo) return -1;
+    EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac_algo);
     int ok = 0;
-    if (HMAC_Init_ex(ctx, mac_key, 32, EVP_sha256(), NULL) != 1) goto done;
-    if (HMAC_Update(ctx, sender_id_pub, 32) != 1) goto done;
-    if (HMAC_Update(ctx, receiver_id_pub, 32) != 1) goto done;
-    if (HMAC_Update(ctx, &version, 1) != 1) goto done;
-    if (HMAC_Update(ctx, serialized, serialized_len) != 1) goto done;
-    if (HMAC_Final(ctx, full_mac, &full_mac_len) != 1) goto done;
+    if (!ctx) goto done;
+    char sha256[] = "SHA256";  // OSSL_PARAM_construct_utf8_string wants char *
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string("digest", sha256, 0),
+        OSSL_PARAM_construct_end()
+    };
+    if (EVP_MAC_init(ctx, mac_key, 32, params) != 1) goto done;
+    if (EVP_MAC_update(ctx, sender_id_pub, 32) != 1) goto done;
+    if (EVP_MAC_update(ctx, receiver_id_pub, 32) != 1) goto done;
+    if (EVP_MAC_update(ctx, &version, 1) != 1) goto done;
+    if (EVP_MAC_update(ctx, serialized, serialized_len) != 1) goto done;
+    if (EVP_MAC_final(ctx, full_mac, &full_mac_len, sizeof(full_mac)) != 1)
+        goto done;
     if (full_mac_len < DR_MAC_LEN) goto done;
     memcpy(out_mac, full_mac, DR_MAC_LEN);
     ok = 1;
 done:
-    HMAC_CTX_free(ctx);
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac_algo);
     sodium_memzero(full_mac, sizeof(full_mac));
     return ok ? 0 : -1;
 }

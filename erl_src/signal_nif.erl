@@ -80,11 +80,11 @@ load_nif() ->
     load_nif_from_paths(Paths).
 
 get_priv_path(LibName) ->
-    case code:priv_dir(nif) of
+    case code:priv_dir(libsignal_protocol_nif) of
         {error, _} ->
             % Fallback to manual path construction
             case code:which(?MODULE) of
-                non_existing -> 
+                non_existing ->
                     "./priv/" ++ LibName;
                 Path ->
                     % Get the directory containing the beam file
@@ -99,7 +99,7 @@ get_priv_path(LibName) ->
 
 get_app_priv_path(LibName) ->
     % Try to find priv directory relative to the application
-    case application:get_env(nif, priv_dir) of
+    case application:get_env(libsignal_protocol_nif, priv_dir) of
         {ok, PrivDir} ->
             filename:join(PrivDir, LibName);
         undefined ->

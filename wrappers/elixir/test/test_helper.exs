@@ -3,6 +3,41 @@ ExUnit.start()
 # Configure test environment
 ExUnit.configure(exclude: [:skip], trace: true)
 
+# Make the parent project's compiled Erlang modules available so the NIF
+# stub modules (`libsignal_protocol_nif`, `signal_nif`) are loadable from
+# ExUnit. The wrapper has no compile-time dep on the parent OTP app; we
+# add it to the code path at runtime and trigger the on_load NIF init.
+defmodule LibsignalProtocolTestSetup do
+  @parent_root Path.expand("../../..", __DIR__)
+
+  def setup do
+    add_code_path(Path.join(@parent_root, "_build/default/lib/libsignal_protocol_nif/ebin"))
+
+    ensure_loaded(:libsignal_protocol_nif)
+    ensure_loaded(:signal_nif)
+  end
+
+  defp add_code_path(path) do
+    unless File.dir?(path) do
+      raise """
+      libsignal_protocol_nif ebin not found at #{path}.
+      Run `make build` in the project root before running wrapper tests.
+      """
+    end
+
+    :code.add_pathz(String.to_charlist(path))
+  end
+
+  defp ensure_loaded(mod) do
+    case Code.ensure_loaded(mod) do
+      {:module, ^mod} -> :ok
+      {:error, reason} -> raise "failed to load #{inspect(mod)}: #{inspect(reason)}"
+    end
+  end
+end
+
+LibsignalProtocolTestSetup.setup()
+
 # Test helper functions
 defmodule TestHelper do
   @moduledoc """
