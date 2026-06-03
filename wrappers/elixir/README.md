@@ -4,171 +4,101 @@
 [![Hex.pm](https://img.shields.io/hexpm/dt/libsignal_protocol.svg)](https://hex.pm/packages/libsignal_protocol)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Elixir wrapper for Signal Protocol cryptographic primitives with libsodium.
+Elixir wrapper over `:libsignal_protocol_nif` -- the Erlang NIF in the [parent repo](https://github.com/Hydepwns/libsignal-protocol-nif). The wrapper is a thin facade: it forwards calls to the NIF and returns whatever the NIF returns (`{:ok, term} | {:error, atom}`).
 
-This package provides idiomatic Elixir APIs for Signal Protocol operations, including key generation, digital signatures, encryption, and session management.
+The NIF is not built by this package. Either depend on the parent project's build artifacts or run `make build` in the repo root first. A missing NIF raises `UndefinedFunctionError` at the call site.
 
-## Installation
-
-Add `libsignal_protocol` to your list of dependencies in `mix.exs`:
+## Install
 
 ```elixir
 def deps do
-  [
-    {:libsignal_protocol, "~> 0.1.1"}
-  ]
+  [{:libsignal_protocol, "~> 0.2"}]
 end
 ```
 
-## Quick Start
+## Modules
+
+- `LibsignalProtocol` -- `init/0`, `generate_identity_key_pair/0`, `create_session/2`
+- `SignalProtocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage
+- `SignalProtocol.PreKeyBundle` -- bundle serialize / parse / verify
+
+## Quick start
 
 ```elixir
-# Initialize the library
-{:ok, _} = LibsignalProtocol.init()
+:ok = LibsignalProtocol.init()
 
-# Generate identity key pair
-{:ok, {public_key, private_key}} = SignalProtocol.generate_identity_key_pair()
+# Each party generates an identity key pair (Ed25519)
+{:ok, {alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
+{:ok, {bob_pub,   bob_priv}}   = SignalProtocol.generate_identity_key_pair()
 
-# Generate pre-key
-{:ok, {key_id, pre_key}} = SignalProtocol.generate_pre_key(1)
-
-# Create session
-{:ok, session} = SignalProtocol.create_session(public_key)
-
-# Encrypt message
-{:ok, encrypted} = SignalProtocol.encrypt_message(session, "Hello, Signal!")
-
-# Decrypt message
-{:ok, decrypted} = SignalProtocol.decrypt_message(session, encrypted)
+# Pre-keys (Bob publishes these)
+{:ok, {opk_id, opk_pub}}            = SignalProtocol.generate_pre_key(1)
+{:ok, {spk_id, spk_pub, spk_sig}}   = SignalProtocol.generate_signed_pre_key(bob_priv, 2)
 ```
 
-## Available Modules
-
-### `SignalProtocol`
-
-Core cryptographic operations and key management.
+X3DH against a remote bundle. The bundle binary is `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)` with an optional trailing 32-byte one-time prekey. The signature is Ed25519 over `signed_prekey_pub` under the remote identity key.
 
 ```elixir
-# Key generation
-{:ok, {public, private}} = SignalProtocol.generate_identity_key_pair()
-{:ok, {key_id, pre_key}} = SignalProtocol.generate_pre_key(1)
-{:ok, {key_id, signed_pre_key}} = SignalProtocol.generate_signed_pre_key(private, 2)
+bundle = <<bob_pub::binary, spk_pub::binary, spk_sig::binary, opk_pub::binary>>
 
-# Session management
-{:ok, session} = SignalProtocol.create_session(remote_public_key)
-{:ok, session} = SignalProtocol.create_session(local_private_key, remote_public_key)
-
-# Message encryption/decryption
-{:ok, encrypted} = SignalProtocol.encrypt_message(session, message)
-{:ok, decrypted} = SignalProtocol.decrypt_message(session, encrypted)
+{:ok, {shared_secret, alice_eph_pub}} =
+  SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
 ```
 
-### `Session`
-
-Session management and key exchange operations.
+Double Ratchet:
 
 ```elixir
-# Create new session
-session = Session.new(identity_key_pair)
+# Alice is the initiator -> is_alice = 1
+{:ok, alice_dr} =
+  SignalProtocol.init_double_ratchet(shared_secret, alice_pub, bob_pub, <<>>, 1)
 
-# Process pre-key bundle
-{:ok, updated_session} = Session.process_pre_key_bundle(session, bundle)
+# Alice's first message is wrapped in a PreKeySignalMessage envelope
+pre_key_info = {_reg_id = 1, opk_id, spk_id, alice_eph_pub}
+{:ok, {wire, alice_dr}} =
+  SignalProtocol.dr_encrypt_prekey(alice_dr, "hello", pre_key_info)
 
-# Encrypt/decrypt messages
-{:ok, encrypted} = Session.encrypt(session, message)
-{:ok, decrypted} = Session.decrypt(session, encrypted)
+# Subsequent messages
+{:ok, {ct, alice_dr}} = SignalProtocol.dr_encrypt_message(alice_dr, "second")
 ```
 
-### `PreKeyBundle`
-
-Pre-key bundle handling and validation.
+Bob recovers the same shared secret from the envelope:
 
 ```elixir
-# Create pre-key bundle
-bundle = PreKeyBundle.new(identity_key, signed_pre_key, pre_keys)
+{:ok, {_reg, _base, _id, opk_id, spk_id, inner}} = SignalProtocol.pksm_decode(wire)
 
-# Validate bundle
-case PreKeyBundle.validate(bundle) do
-  {:ok, bundle} -> # Bundle is valid
-  {:error, reason} -> # Bundle validation failed
-end
+{:ok, bob_shared} =
+  SignalProtocol.process_pre_key_bundle_bob(
+    bob_priv, spk_priv, opk_priv, alice_pub, alice_eph_pub
+  )
+
+# is_alice = 0 for Bob
+{:ok, bob_dr} =
+  SignalProtocol.init_double_ratchet(bob_shared, bob_pub, alice_pub, bob_priv, 0)
+
+{:ok, {"hello", bob_dr}} = SignalProtocol.dr_decrypt_message(bob_dr, inner)
 ```
 
-### `LibsignalProtocol`
+Full inline docs live in `lib/signal_protocol.ex`. End-to-end test flows are in the parent repo under `test/erl/unit/protocol/`.
 
-Main interface module providing high-level operations.
+## Pre-key bundles
+
+`SignalProtocol.PreKeyBundle` handles the higher-level bundle format used between parties (versioned, includes key IDs):
 
 ```elixir
-# Initialize the library
-{:ok, _} = LibsignalProtocol.init()
+{:ok, bundle} =
+  SignalProtocol.PreKeyBundle.create(
+    registration_id, identity_key, {opk_id, opk_pub},
+    {spk_id, spk_pub, spk_sig}, base_key
+  )
 
-# Generate keys
-{:ok, keys} = LibsignalProtocol.generate_keys()
-
-# Create session
-{:ok, session} = LibsignalProtocol.create_session(recipient_id)
-
-# Send message
-{:ok, encrypted} = LibsignalProtocol.encrypt_message(session, message)
-
-# Receive message
-{:ok, decrypted} = LibsignalProtocol.decrypt_message(session, encrypted)
+{:ok, parsed} = SignalProtocol.PreKeyBundle.parse(bundle)
+:ok = SignalProtocol.PreKeyBundle.verify_signature(bundle)
 ```
 
-## Error Handling
+## Errors
 
-All functions return `{:ok, result}` on success or `{:error, reason}` on failure:
-
-```elixir
-case SignalProtocol.generate_identity_key_pair() do
-  {:ok, {public, private}} ->
-    # Success - use the keys
-    IO.puts("Generated keys successfully")
-
-  {:error, reason} ->
-    # Handle error
-    IO.puts("Key generation failed: #{reason}")
-end
-```
-
-## Common Error Reasons
-
-- `:invalid_parameters` - Invalid input parameters
-- `:key_generation_failed` - Cryptographic key generation failed
-- `:encryption_failed` - Message encryption failed
-- `:decryption_failed` - Message decryption failed
-- `:invalid_session` - Session state is invalid
-- `:invalid_signature` - Digital signature verification failed
-
-## Performance
-
-This wrapper uses the same high-performance C NIF implementation as the core library, providing:
-
-- Native performance for cryptographic operations
-- Efficient memory management
-- Secure memory clearing
-- Thread-safe operations
-
-## Security
-
-- All cryptographic operations use libsodium
-- Sensitive data is automatically cleared from memory
-- Keys are validated before use
-- Signatures are verified for authenticity
-
-## Documentation
-
-For detailed documentation, see:
-
-- [📚 Complete API Reference](../../docs/API.md)
-- [🏗️ Architecture Guide](../../docs/ARCHITECTURE.md)
-- [🔒 Security Considerations](../../docs/SECURITY.md)
-- [📋 Documentation Plan](../../docs/DOCUMENTATION_PLAN.md)
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](../../CONTRIBUTING.md) for details.
+NIF errors are returned verbatim. The wrapper does not translate, rename, or wrap them. If the NIF returns `{:error, :invalid_signature}`, that is what you get.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
+Apache-2.0.

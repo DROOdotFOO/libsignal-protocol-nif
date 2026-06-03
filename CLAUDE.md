@@ -19,8 +19,8 @@ make diagnose        # prints state of build dirs; flags nested c_src/build/c_sr
 
 `make build` produces **two** shared libraries in `priv/` (each has its own `.c` entry point and `add_library` in `c_src/CMakeLists.txt`):
 
-- `signal_nif.{so,dylib}` — lower-level crypto primitives (`erl_src/signal_nif.erl` / `c_src/signal_nif.c`)
-- `libsignal_protocol_nif.{so,dylib}` — main module (`erl_src/libsignal_protocol_nif.erl` / `c_src/libsignal_protocol_nif.c`), includes session, X3DH, double ratchet (DR-HE), PKSM, keys
+- `signal_nif.{so,dylib}` — lower-level crypto primitives (`src/signal_nif.erl` / `c_src/signal_nif.c`)
+- `libsignal_protocol_nif.{so,dylib}` — main module (`src/libsignal_protocol_nif.erl` / `c_src/libsignal_protocol_nif.c`), includes session, X3DH, double ratchet (DR-HE), PKSM, keys
 
 After cmake produces the libs, the Makefile **and** `scripts/copy_nifs.sh` (a rebar3 post-compile hook in `rebar.config`) copy them into per-profile build dirs: `_build/{default,test,unit+test}/lib/nif/priv/` and matching `extras/test/priv/`. If the NIF loads in `default` but not in `unit+test`, the copy step is the suspect.
 

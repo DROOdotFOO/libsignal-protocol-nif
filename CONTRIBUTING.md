@@ -1,404 +1,89 @@
-# Contributing to libsignal-protocol-nif
+# Contributing
 
-Thank you for your interest in contributing to libsignal-protocol-nif! This document provides guidelines for contributing to the project.
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Nix** (for development environment)
-- **Git** (for version control)
-- **Basic knowledge** of Erlang, Elixir, and/or Gleam
-
-### Development Setup
-
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/hydepwns/libsignal-protocol-nif.git
-   cd libsignal-protocol-nif
-   ```
-
-2. **Enter the development environment:**
-
-   ```bash
-   nix-shell
-   ```
-
-3. **Build the project:**
-
-   ```bash
-   make build
-   ```
-
-4. **Run tests:**
-
-   ```bash
-   make test-unit
-   ```
-
-## 🏗️ Project Structure
+## Setup
 
 ```bash
-libsignal-protocol-nif/
-├── c_src/                    # C NIF implementation
-│   ├── crypto/              # Cryptographic operations
-│   ├── keys/                # Key management
-│   ├── session/             # Session handling
-│   └── utils/               # Utility functions
-├── erl_src/                 # Erlang source code
-├── wrappers/                # Language wrappers
-│   ├── elixir/              # Elixir wrapper
-│   └── gleam/               # Gleam wrapper
-├── test/                    # Test suites
-│   ├── erl/                 # Erlang tests
-│   ├── elixir/              # Elixir tests
-│   └── gleam/               # Gleam tests
-└── docs/                    # Documentation
+git clone https://github.com/Hydepwns/libsignal-protocol-nif.git
+cd libsignal-protocol-nif
+nix-shell --run "make build && make test-unit"
 ```
 
-## 📝 Code Style Guidelines
+Without Nix you need libsodium, OpenSSL 3, CMake, Erlang/OTP 26, Elixir 1.16, and rebar 3.22. The pinned versions live in `.tool-versions`.
 
-### C Code (NIF Implementation)
+Layout, build internals, and the NIF copy-fanout are in [CLAUDE.md](CLAUDE.md). The short version: `make build` produces two shared libraries in `priv/` and `scripts/copy_nifs.sh` fans them into per-profile dirs. If the NIF loads in `default` but not `unit+test`, look there first.
 
-- **Formatting:** Use consistent indentation (2 spaces)
-- **Naming:** Use snake_case for functions and variables
-- **Comments:** Document all public functions with clear descriptions
-- **Error Handling:** Always check return values and handle errors gracefully
-- **Memory Management:** Use `sodium_memzero()` for sensitive data
-
-```c
-/**
- * Generate a Curve25519 key pair for ECDH key exchange.
- *
- * @param env Erlang environment
- * @param argc Number of arguments (should be 0)
- * @param argv Argument array (unused)
- * @return {ok, {PublicKey, PrivateKey}} or {error, Reason}
- */
-static ERL_NIF_TERM generate_curve25519_keypair(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    // Implementation here
-}
-```
-
-### Erlang Code
-
-- **Formatting:** Use `rebar3 format` for consistent formatting
-- **Naming:** Use snake_case for functions and variables
-- **Documentation:** Use `@doc` and `@spec` for all public functions
-- **Error Handling:** Return `{ok, Result}` or `{error, Reason}`
-
-```erlang
-%% @doc Generate a Curve25519 key pair for ECDH key exchange.
-%% @returns {ok, {PublicKey, PrivateKey}} or {error, Reason}
--spec generate_curve25519_keypair() -> {ok, {binary(), binary()}} | {error, term()}.
-generate_curve25519_keypair() ->
-    % Implementation here
-    ok.
-```
-
-### Elixir Code
-
-- **Formatting:** Use `mix format` for consistent formatting
-- **Naming:** Use snake_case for functions and variables
-- **Documentation:** Use `@doc` and `@spec` for all public functions
-- **Error Handling:** Return `{:ok, result}` or `{:error, reason}`
-
-```elixir
-@doc """
-Generate a Curve25519 key pair for ECDH key exchange.
-
-## Returns
-
-  * `{:ok, {public_key, private_key}}` - Successfully generated key pair
-  * `{:error, reason}` - Key generation failed
-
-## Examples
-
-    iex> SignalProtocol.generate_curve25519_keypair()
-    {:ok, {public_key, private_key}}
-
-"""
-@spec generate_curve25519_keypair() :: {:ok, {binary(), binary()}} | {:error, term()}
-def generate_curve25519_keypair do
-  # Implementation here
-end
-```
-
-### Gleam Code
-
-- **Formatting:** Use `gleam format` for consistent formatting
-- **Naming:** Use snake_case for functions and variables
-- **Documentation:** Use `///` for documentation comments
-- **Error Handling:** Use `Result` types for error handling
-
-```gleam
-/// Generate a Curve25519 key pair for ECDH key exchange.
-///
-/// Returns `Ok(#(PublicKey, PrivateKey))` on success or `Error(String)` on failure.
-pub fn generate_curve25519_keypair() -> Result(#(Binary, Binary), String) {
-  // Implementation here
-}
-```
-
-## 🧪 Testing Guidelines
-
-### Running Tests
+## Build and test
 
 ```bash
-# Run all tests
-make test
+make build              # cmake + copy NIFs
+make test               # default profile (signal_crypto_SUITE only)
+make test-unit          # full DR / X3DH / crypto suite
+make test-cover         # default + coverage
+make test-unit-cover    # full + coverage
+make perf-test          # performance_test:run_benchmarks/0
+make diagnose           # flags nested c_src/build/c_src corruption
+```
 
-# Run specific test suites
-make test-unit        # Unit tests only
-make test-integration # Integration tests only
-make test-smoke       # Smoke tests only
+Single suite or case:
 
-# Run tests with coverage
-make test-cover
+```bash
+rebar3 as unit ct --suite test/erl/unit/crypto/signal_crypto_SUITE
+rebar3 as unit ct --suite test/erl/unit/protocol/double_ratchet_SUITE \
+                 --case alice_to_bob_first_message_roundtrips
+```
 
-# Run tests for specific wrappers
+Wrapper tests run from their own directories and expect `priv/*.{so,dylib}` to already exist:
+
+```bash
 cd wrappers/elixir && mix test
-cd wrappers/gleam && gleam test
+cd wrappers/gleam  && gleam test
 ```
 
-### Writing Tests
+## Style
 
-- **Coverage:** Aim for 90%+ test coverage
-- **Naming:** Use descriptive test names that explain the scenario
-- **Structure:** Use the Arrange-Act-Assert pattern
-- **Isolation:** Each test should be independent and not affect others
+- **C**: snake_case, `sodium_memzero` on sensitive buffers, return `{ok, ...} | {error, atom_reason}`. The CMake target list in `c_src/CMakeLists.txt` is the source of truth for what gets built.
+- **Erlang**: `rebar3 format`. `@spec` on public functions. `{ok, T} | {error, term()}` returns.
+- **Wrappers**: mirror the Erlang return shape; do not invent new error vocabularies. The Elixir wrapper returns atoms verbatim; the Gleam wrapper returns the atom/string as `Result(_, String)`.
 
-#### Erlang Test Example
+## Adding a NIF function
 
-```erlang
-generate_curve25519_keypair_test() ->
-    % Arrange
-    % (setup if needed)
+1. Implement in the matching `c_src/*.c` file.
+2. Register in the dispatch table at the top of `c_src/libsignal_protocol_nif.c` (or `signal_nif.c`).
+3. Add `-export` and a stub in the matching `src/*.erl`, with `-spec`.
+4. Add a CT suite under `test/erl/unit/<area>/` and run `make test-unit`.
 
-    % Act
-    {ok, {PublicKey, PrivateKey}} = signal_nif:generate_curve25519_keypair(),
+The post-compile hook fans the rebuilt `.so` out, so no `rebar.config` changes unless you add a new profile.
 
-    % Assert
-    ?assertEqual(32, byte_size(PublicKey)),
-    ?assertEqual(32, byte_size(PrivateKey)),
-    ?assertNotEqual(PublicKey, PrivateKey).
-```
+## Pre-PR checklist
 
-#### Elixir Test Example
+- `make test-unit` passes.
+- `rebar3 format --verify` is clean (CI runs this).
+- Wrapper tests pass if you touched a wrapper.
+- A CT suite covers the change. Tests live alongside the layer they exercise.
+- If you changed the C dispatch table or any wire format, note it in `CHANGELOG.md` under `[Unreleased]`. Breaking changes are clearly flagged there.
+- Don't commit `priv/*.{so,dylib}` -- they're built artifacts.
+- Don't run with `--no-verify`. If a hook fails, fix the cause.
 
-```elixir
-test "generates valid Curve25519 key pair" do
-  # Arrange
-  # (setup if needed)
+## PR description
 
-  # Act
-  {:ok, {public_key, private_key}} = SignalProtocol.generate_curve25519_keypair()
+Title under 70 chars. In the body:
 
-  # Assert
-  assert byte_size(public_key) == 32
-  assert byte_size(private_key) == 32
-  assert public_key != private_key
-end
-```
+- What changed and why.
+- Whether the change is wire-breaking (DR session blobs, bundle layout, PKSM envelope).
+- How you tested it -- which suite, which case.
 
-#### Gleam Test Example
+## Release
 
-```gleam
-pub fn generate_curve25519_keypair_test() {
-  // Arrange
-  // (setup if needed)
+`VERSION` is the source of truth. `make release-{patch,minor,major}` runs `scripts/release.sh`. CI workflows live in `.github/workflows/{ci.yml,gleam-ci.yml,release.yml}`.
 
-  // Act
-  let Ok(#(public_key, private_key)) = signal_protocol.generate_curve25519_keypair()
+The publish sequence has multiple steps because the Hex tarball references binaries that don't exist until the release workflow runs:
 
-  // Assert
-  assert byte_size(public_key) == 32
-  assert byte_size(private_key) == 32
-  assert public_key != private_key
-}
-```
+1. Bump VERSION, mix.exs, gleam.toml, `src/*.app.src` if needed.
+2. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. The push triggers `release.yml`, which builds the NIF on four platforms and creates a GitHub Release with the per-platform tarballs and `CHECKSUMS.txt` attached. Wait for this to finish (~10 min).
+3. Locally: `make hex-package`. Builds a clean source tarball at `_build/default/lib/libsignal_protocol_nif/hex/libsignal_protocol_nif-X.Y.Z.tar`.
+4. `rebar3 hex publish` from the repo root publishes the Erlang package. At install time, consumers' `c_src/build_nif.sh` (shipped in the tarball) fetches the matching binary from the GitHub Release created in step 2.
+5. `make publish-wrappers` publishes the Elixir and Gleam wrappers via `mix hex.publish` and `rebar3 hex publish` in `wrappers/{elixir,gleam}/`.
 
-## 🔒 Security Guidelines
+## Reporting bugs
 
-### Cryptographic Code
-
-- **Never log sensitive data** (keys, plaintext, etc.)
-- **Use secure random number generation** (libsodium's `randombytes_buf`)
-- **Clear sensitive memory** with `sodium_memzero()`
-- **Validate all inputs** before cryptographic operations
-- **Use constant-time operations** where possible
-
-### Code Review Security Checklist
-
-- [ ] No sensitive data in logs or error messages
-- [ ] All cryptographic inputs are validated
-- [ ] Memory is properly cleared after use
-- [ ] No timing attacks possible
-- [ ] Error messages don't leak sensitive information
-
-## 📋 Pull Request Process
-
-### Before Submitting
-
-1. **Ensure tests pass:**
-
-   ```bash
-   make test
-   ```
-
-2. **Check code formatting:**
-
-   ```bash
-   rebar3 format
-   mix format
-   gleam format
-   ```
-
-3. **Update documentation** if adding new features
-
-4. **Add tests** for new functionality
-
-### Pull Request Guidelines
-
-1. **Title:** Use clear, descriptive titles (e.g., "Add AES-GCM encryption support")
-
-2. **Description:** Include:
-
-   - What the change does
-   - Why the change is needed
-   - How to test the change
-   - Any breaking changes
-
-3. **Scope:** Keep PRs focused on a single feature or bug fix
-
-4. **Tests:** Include tests for new functionality
-
-### Review Process
-
-1. **Automated checks** must pass (tests, formatting, etc.)
-2. **Code review** by maintainers
-3. **Security review** for cryptographic changes
-4. **Documentation review** for new features
-
-## 🚀 Release Process
-
-### Version Numbering
-
-We use [Semantic Versioning](https://semver.org/):
-
-- **MAJOR.MINOR.PATCH**
-- **MAJOR:** Breaking changes
-- **MINOR:** New features (backward compatible)
-- **PATCH:** Bug fixes (backward compatible)
-
-### Release Checklist
-
-- [ ] All tests pass
-- [ ] Documentation is updated
-- [ ] Version numbers are updated in all packages
-- [ ] Changelog is updated
-- [ ] Packages are published to Hex.pm
-
-### Publishing to Hex.pm
-
-```bash
-# Publish all packages
-make publish-wrappers
-
-# Publish individual packages
-cd wrappers/elixir && mix hex.publish
-cd wrappers/gleam && rebar3 hex publish
-rebar3 hex publish --replace
-```
-
-## 🐛 Bug Reports
-
-### Before Reporting
-
-1. **Check existing issues** to avoid duplicates
-2. **Try the latest version** to ensure the bug still exists
-3. **Reproduce the issue** with minimal code
-
-### Bug Report Template
-
-```markdown
-**Description:**
-Brief description of the issue
-
-**Steps to Reproduce:**
-
-1. Step 1
-2. Step 2
-3. Step 3
-
-**Expected Behavior:**
-What should happen
-
-**Actual Behavior:**
-What actually happens
-
-**Environment:**
-
-- OS: [e.g., macOS 14.0]
-- Erlang/OTP: [e.g., 27.0]
-- Elixir: [e.g., 1.15.0] (if applicable)
-- Gleam: [e.g., 0.37.0] (if applicable)
-
-**Additional Information:**
-Any other relevant details
-```
-
-## 💡 Feature Requests
-
-### Before Requesting
-
-1. **Check existing issues** to avoid duplicates
-2. **Consider the scope** and impact
-3. **Think about implementation** approach
-
-### Feature Request Template
-
-```markdown
-**Description:**
-Brief description of the feature
-
-**Use Case:**
-Why this feature is needed
-
-**Proposed Implementation:**
-How you think it should work
-
-**Alternatives Considered:**
-Other approaches you've considered
-
-**Additional Information:**
-Any other relevant details
-```
-
-## 🤝 Community Guidelines
-
-### Code of Conduct
-
-- **Be respectful** and inclusive
-- **Help others** learn and grow
-- **Provide constructive feedback**
-- **Focus on the code**, not the person
-
-### Communication
-
-- **Use clear language** and avoid jargon
-- **Provide context** for questions and issues
-- **Be patient** with newcomers
-- **Celebrate contributions** and improvements
-
-## 📞 Getting Help
-
-- **Issues:** Use GitHub issues for bugs and feature requests
-- **Discussions:** Use GitHub discussions for questions and ideas
-- **Documentation:** Check the [docs/](docs/) directory for detailed guides
-
-## 🙏 Thank You
-
-Thank you for contributing to libsignal-protocol-nif! Your contributions help make the BEAM ecosystem more secure and powerful for everyone.
+GitHub Issues. Include OS, Erlang/OTP version, the failing command, and the output. For security issues see [docs/SECURITY.md](docs/SECURITY.md) before filing publicly.

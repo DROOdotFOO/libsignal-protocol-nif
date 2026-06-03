@@ -4,200 +4,95 @@
 [![Hex.pm](https://img.shields.io/hexpm/dt/libsignal_protocol_gleam.svg)](https://hex.pm/packages/libsignal_protocol_gleam)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Gleam wrapper for Signal Protocol cryptographic primitives with libsodium.
+Gleam wrapper over `libsignal_protocol_nif` -- the Erlang NIF in the [parent repo](https://github.com/Hydepwns/libsignal-protocol-nif). All calls return `Result(_, String)`. Errors come back as the atoms/strings the NIF produces; there is no typed error enum.
 
-This package provides type-safe Gleam APIs for Signal Protocol operations, including key generation, digital signatures, encryption, and session management.
+The NIF is not built by this package. Build it in the parent repo (`make build`) before depending on this wrapper.
 
-## Installation
-
-Add `libsignal_protocol_gleam` to your list of dependencies in `gleam.toml`:
+## Install
 
 ```toml
 [dependencies]
-libsignal_protocol_gleam = "~> 0.1.1"
+libsignal_protocol_gleam = "~> 0.2"
 ```
 
-## Quick Start
+## Modules
+
+- `signal_protocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage
+- `pre_key_bundle` -- `create`, `parse`, `verify_signature`, `to_binary`
+- `utils` -- `generate_user_keys`, `create_user_bundle` (convenience helpers)
+
+## Types
 
 ```gleam
-import libsignal_protocol_gleam/signal_protocol
-import libsignal_protocol_gleam/session
-import gleam/result
-
-// Initialize the library
-let Ok(_) = signal_protocol.init()
-
-// Generate identity key pair
-let Ok(#(public_key, private_key)) = signal_protocol.generate_identity_key_pair()
-
-// Generate pre-key
-let Ok(#(key_id, pre_key)) = signal_protocol.generate_pre_key(1)
-
-// Create session
-let Ok(session) = signal_protocol.create_session(public_key)
-
-// Encrypt message
-let Ok(encrypted) = signal_protocol.encrypt_message(session, "Hello, Signal!")
-
-// Decrypt message
-let Ok(decrypted) = signal_protocol.decrypt_message(session, encrypted)
+pub type IdentityKeyPair { IdentityKeyPair(public_key: BitArray, private_key: BitArray) }
+pub type PreKey          { PreKey(key_id: Int, public_key: BitArray) }
+pub type SignedPreKey    { SignedPreKey(key_id: Int, public_key: BitArray, signature: BitArray) }
+pub type DrSession       { DrSession(state: BitArray) }
+pub type DrRole          { Alice | Bob }
 ```
 
-## Available Modules
-
-### `signal_protocol`
-
-Core cryptographic operations and key management.
+## Quick start
 
 ```gleam
-import libsignal_protocol_gleam/signal_protocol
+import gleam/option
+import pre_key_bundle
+import signal_protocol
 
-// Key generation
-let Ok(#(public, private)) = signal_protocol.generate_identity_key_pair()
-let Ok(#(key_id, pre_key)) = signal_protocol.generate_pre_key(1)
-let Ok(#(key_id, signed_pre_key)) = signal_protocol.generate_signed_pre_key(private, 2)
-
-// Session management
-let Ok(session) = signal_protocol.create_session(remote_public_key)
-let Ok(session) = signal_protocol.create_session(local_private_key, remote_public_key)
-
-// Message encryption/decryption
-let Ok(encrypted) = signal_protocol.encrypt_message(session, message)
-let Ok(decrypted) = signal_protocol.decrypt_message(session, encrypted)
+let assert Ok(alice) = signal_protocol.generate_identity_key_pair()
+let assert Ok(bob)   = signal_protocol.generate_identity_key_pair()
+let assert Ok(opk)   = signal_protocol.generate_pre_key(1)
+let assert Ok(spk)   = signal_protocol.generate_signed_pre_key(bob.private_key, 2)
 ```
 
-### `session`
-
-Session management and key exchange operations.
+X3DH. `process_pre_key_bundle` takes a typed `PreKeyBundle`; the wrapper serializes it to the format the NIF expects:
 
 ```gleam
-import libsignal_protocol_gleam/session
+let assert Ok(bundle) =
+  pre_key_bundle.create(
+    registration_id: 1,
+    identity_key: bob.public_key,
+    pre_key: opk,
+    signed_pre_key: spk,
+    base_key: <<0>>,
+  )
 
-// Create new session
-let session = session.new(identity_key_pair)
-
-// Process pre-key bundle
-let Ok(updated_session) = session.process_pre_key_bundle(session, bundle)
-
-// Encrypt/decrypt messages
-let Ok(encrypted) = session.encrypt(session, message)
-let Ok(decrypted) = session.decrypt(session, encrypted)
+let assert Ok(#(shared_secret, alice_eph_pub)) =
+  signal_protocol.process_pre_key_bundle(alice.private_key, bundle)
 ```
 
-### `pre_key_bundle`
-
-Pre-key bundle handling and validation.
+Double Ratchet:
 
 ```gleam
-import libsignal_protocol_gleam/pre_key_bundle
+let assert Ok(alice_dr) =
+  signal_protocol.init_double_ratchet(
+    shared_secret,
+    alice.public_key,
+    bob.public_key,
+    <<>>,
+    signal_protocol.Alice,
+  )
 
-// Create pre-key bundle
-let bundle = pre_key_bundle.new(identity_key, signed_pre_key, pre_keys)
+let info =
+  signal_protocol.PreKeyInfo(
+    registration_id: 1,
+    one_time_pre_key_id: option.Some(opk.key_id),
+    signed_pre_key_id: spk.key_id,
+    alice_ephemeral_pub: alice_eph_pub,
+  )
 
-// Validate bundle
-case pre_key_bundle.validate(bundle) {
-  Ok(bundle) -> // Bundle is valid
-  Error(reason) -> // Bundle validation failed
-}
+let assert Ok(#(wire, alice_dr)) =
+  signal_protocol.dr_encrypt_prekey(alice_dr, <<"hello">>, info)
+
+let assert Ok(#(ct, alice_dr)) =
+  signal_protocol.dr_encrypt_message(alice_dr, <<"second">>)
 ```
 
-### `utils`
+Bob recovers the shared secret from the envelope and initializes his side with `signal_protocol.Bob`. See `src/signal_protocol.gleam` for per-function docs and `test/` for end-to-end examples.
 
-Utility functions and type conversions.
+## Errors
 
-```gleam
-import libsignal_protocol_gleam/utils
-
-// Convert between different key formats
-let binary_key = utils.key_to_binary(key)
-let key = utils.binary_to_key(binary_key)
-
-// Validate key formats
-let Ok(key) = utils.validate_key(binary_key)
-```
-
-## Error Handling
-
-All functions return `Result` types for type-safe error handling:
-
-```gleam
-import gleam/result
-
-case signal_protocol.generate_identity_key_pair() {
-  Ok(#(public, private)) -> {
-    // Success - use the keys
-    io.println("Generated keys successfully")
-  }
-  Error(reason) -> {
-    // Handle error
-    io.println("Key generation failed: " <> reason)
-  }
-}
-```
-
-## Common Error Types
-
-```gleam
-pub type Error {
-  InvalidParameters(String)
-  KeyGenerationFailed(String)
-  EncryptionFailed(String)
-  DecryptionFailed(String)
-  InvalidSession(String)
-  InvalidSignature(String)
-}
-```
-
-## Type Safety
-
-This wrapper provides full type safety for all operations:
-
-```gleam
-// Keys are strongly typed
-pub type IdentityKeyPair {
-  IdentityKeyPair(PublicKey, PrivateKey)
-}
-
-pub type Session {
-  Session(Binary)
-}
-
-// Functions have clear type signatures
-pub fn generate_identity_key_pair() -> Result(IdentityKeyPair, Error)
-pub fn encrypt_message(Session, String) -> Result(Binary, Error)
-pub fn decrypt_message(Session, Binary) -> Result(String, Error)
-```
-
-## Performance
-
-This wrapper uses the same high-performance C NIF implementation as the core library, providing:
-
-- Native performance for cryptographic operations
-- Efficient memory management
-- Secure memory clearing
-- Thread-safe operations
-
-## Security
-
-- All cryptographic operations use libsodium
-- Sensitive data is automatically cleared from memory
-- Keys are validated before use
-- Signatures are verified for authenticity
-- Type safety prevents many common security mistakes
-
-## Documentation
-
-For detailed documentation, see:
-
-- [📚 Complete API Reference](../../docs/API.md)
-- [🏗️ Architecture Guide](../../docs/ARCHITECTURE.md)
-- [🔒 Security Considerations](../../docs/SECURITY.md)
-- [📋 Documentation Plan](../../docs/DOCUMENTATION_PLAN.md)
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](../../CONTRIBUTING.md) for details.
+Everything returns `Result(_, String)`. The string is whatever the NIF returned (e.g. `"invalid_signature"`, `"malformed_message"`). The wrapper does not translate or rewrite errors.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
+Apache-2.0.
