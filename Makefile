@@ -1,32 +1,10 @@
-# Variables
-ERLANG_PATH = $(shell erl -eval 'io:format("~s", [lists:concat([code:root_dir(), "/erts-", erlang:system_info(version), "/erl_src/include"])])' -s init stop -noshell)
-ERL_INTERFACE_PATH = $(shell erl -eval 'io:format("~s", [code:lib_dir(erl_interface, include)])' -s init stop -noshell)
-CFLAGS = -I$(ERLANG_PATH) -I$(ERL_INTERFACE_PATH) -Iinclude -fPIC -O3 -Wall -Wextra
-LDFLAGS = -L$(shell erl -eval 'io:format("~s", [code:lib_dir(erl_interface, lib)])' -s init stop -noshell)
-
-# Platform-specific settings
-ifeq ($(shell uname),Darwin)
-    # macOS - handle both Intel and Apple Silicon
-    ifeq ($(shell uname -m),arm64)
-        CFLAGS += -I/opt/homebrew/opt/openssl/include
-        LDFLAGS += -L/opt/homebrew/opt/openssl/lib
-    else
-        CFLAGS += -I/usr/local/opt/openssl/include
-        LDFLAGS += -L/usr/local/opt/openssl/lib
-    endif
-    SHARED_EXT = dylib
-else ifeq ($(OS),Windows_NT)
-    # Windows
-    SHARED_EXT = dll
-else
-    # Linux
-    CFLAGS += -I/usr/include/openssl
-    LDFLAGS += -L/usr/lib
-    SHARED_EXT = so
-endif
+# The actual NIF compile is driven by c_src/CMakeLists.txt (cmake finds
+# libsodium, openssl, and the BEAM include paths itself). LIBRARY_PATH_ENV
+# below is the only path the Makefile needs to set; it's used by the test
+# targets so they can dlopen Homebrew's keg-only openssl@3 at run time.
 
 # Build targets
-.PHONY: all clean test test-unit test-clean deps install perf-test perf-monitor docker-build docker-test release dev-setup dev-test monitor-memory monitor-cache help ci-build ci-test build-wrappers publish-wrappers
+.PHONY: all clean test test-unit test-clean deps install perf-test perf-quick perf-baseline docker-build docker-test release dev-setup dev-test help ci-build ci-test build-wrappers publish-wrappers hex-package
 
 # Default target
 all: build
@@ -87,11 +65,14 @@ ci-build: check-project-root $(BUILD_DIR)
 	cp priv/signal_nif.so _build/test/lib/nif/priv/ || true
 	@echo "CI build completed successfully!"
 
-# Clean build artifacts
+# Clean build artifacts. CMake currently runs in-tree (see `build` target), so
+# Cache + Makefile + CMakeFiles/ + cmake_install.cmake land in c_src/ alongside
+# the sources. Wipe them too so they don't leak into `rebar3 hex build` tarballs.
 clean: check-project-root
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
 	rm -rf priv/*.so priv/*.dylib priv/*.dll
+	rm -rf c_src/CMakeFiles c_src/CMakeCache.txt c_src/cmake_install.cmake c_src/Makefile
 	@echo "Cleanup completed!"
 
 # Clean test artifacts
@@ -147,14 +128,29 @@ test-unit-cover: test-dirs
 	$(LIBRARY_PATH_ENV) rebar3 as unit ct --dir test/erl/unit --cover
 
 # Run performance tests
-perf-test: test-dirs build
-	@echo "Running performance benchmarks..."
-	$(LIBRARY_PATH_ENV) erl -noshell -pa ebin -pa test -eval "performance_test:run_benchmarks(), halt()."
+# performance_test.erl lives under test/erl/, compiled into the test profile
+# via {extra_src_dirs, ["test/erl"]} in rebar.config. Run with the actual
+# rebar3 output paths, not bare "ebin"/"test" which don't exist at the root.
+PERF_BEAM_PATHS = -pa _build/test/lib/libsignal_protocol_nif/ebin \
+                  -pa _build/test/lib/libsignal_protocol_nif/test/erl
+PERF_ERL = $(LIBRARY_PATH_ENV) erl -noshell $(PERF_BEAM_PATHS)
 
-# Run performance monitoring
-perf-monitor: test-dirs build
-	@echo "Starting performance monitoring..."
-	$(LIBRARY_PATH_ENV) erl -noshell -pa ebin -pa test -eval "performance_test:run_benchmarks(), timer:sleep(5000), performance_test:run_benchmarks(), halt()."
+perf-test: test-dirs build
+	@echo "Running performance benchmarks (full)..."
+	@rebar3 as test compile
+	$(PERF_ERL) -eval "performance_test:run(), halt()."
+
+# Quick smoke run of the full bench surface at low iteration counts (~5s).
+perf-quick: test-dirs build
+	@echo "Running performance benchmarks (quick smoke)..."
+	@rebar3 as test compile
+	$(PERF_ERL) -eval "performance_test:quick(), halt()."
+
+# Regenerate the checked-in baseline.term. Run after intentional perf changes.
+perf-baseline: test-dirs build
+	@echo "Regenerating performance baseline..."
+	@rebar3 as test compile
+	$(PERF_ERL) -eval "performance_test:baseline(), halt()."
 
 # Generate documentation
 docs: test-dirs
@@ -206,6 +202,17 @@ build-wrappers-nix:
 	nix-shell --run "cd wrappers/gleam && gleam build"
 	@echo "Wrapper packages built successfully!"
 
+# Build a clean Hex tarball for the main Erlang package.
+# Builds NIFs first so scripts/copy_nifs.sh's auto-build branch doesn't kick in
+# (that branch runs cmake in-tree in c_src/ and leaves droppings). Then strips
+# any in-tree cmake artifacts left by `make build` itself before packaging, so
+# the tarball ships only sources -- not CMakeFiles/, CMakeCache.txt, etc.
+hex-package: clean build
+	@echo "Stripping in-tree cmake droppings before packaging..."
+	rm -rf c_src/CMakeFiles c_src/CMakeCache.txt c_src/cmake_install.cmake c_src/Makefile c_src/build
+	rebar3 hex build
+	@echo "Tarball: $$(ls _build/default/lib/libsignal_protocol_nif/hex/*.tar)"
+
 # Publish wrapper packages to Hex.pm
 publish-wrappers: build-wrappers
 	@echo "Publishing wrapper packages to Hex.pm..."
@@ -239,14 +246,11 @@ dev-setup: deps build test-dirs
 dev-test: test-unit perf-test
 	@echo "All tests completed"
 
-# Monitoring targets
-monitor-memory:
-	@echo "Monitoring memory usage..."
-	erl -noshell -pa ebin -eval "performance_test:benchmark_memory_usage(1000), halt()."
-
-monitor-cache:
-	@echo "Monitoring cache performance..."
-	erl -noshell -pa ebin -eval "performance_test:benchmark_cache_performance(1000), halt()."
+# monitor-memory / monitor-cache / perf-monitor were removed: the underlying
+# performance_test:benchmark_memory_usage/benchmark_cache_performance functions
+# were stubs that returned `ok` without measuring anything real. Use perf-test
+# (full) or perf-quick (smoke) instead -- the rebuilt suite covers the same
+# ground with real benchmarks.
 
 # CI-specific test target
 ci-test: test-dirs
@@ -263,8 +267,9 @@ help:
 	@echo "  test-unit          - Run unit tests only"
 	@echo "  test-cover         - Run tests with coverage"
 	@echo "  test-unit-cover    - Run unit tests with coverage"
-	@echo "  perf-test          - Run performance benchmarks"
-	@echo "  perf-monitor       - Run performance monitoring"
+	@echo "  perf-test          - Run full performance benchmarks vs baseline"
+	@echo "  perf-quick         - Quick smoke run of perf benchmarks"
+	@echo "  perf-baseline      - Regenerate baseline.term after intentional perf changes"
 	@echo "  docs               - Generate documentation"
 	@echo "  deps               - Install dependencies"
 	@echo "  install            - Build and install"
@@ -277,8 +282,6 @@ help:
 	@echo "  release-major      - Create a major release"
 	@echo "  dev-setup          - Setup development environment"
 	@echo "  dev-test           - Run all development tests"
-	@echo "  monitor-memory     - Monitor memory usage"
-	@echo "  monitor-cache      - Monitor cache performance"
 	@echo "  ci-build           - Build for CI"
 	@echo "  ci-test            - Run CI tests"
 	@echo "  build-wrappers     - Build Elixir and Gleam wrapper packages"
