@@ -19,8 +19,6 @@ all() ->
 
 init_per_suite(Config) ->
     io:format("signal_crypto_SUITE: init_per_suite starting~n", []),
-    % Load the signal_nif module
-    code:add_patha("../../../erl_src"),
     case signal_nif:test_crypto() of
         crypto_ok ->
             io:format("NIF initialized successfully~n"),

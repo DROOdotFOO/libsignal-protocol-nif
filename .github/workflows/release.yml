@@ -1,0 +1,150 @@
+name: Release
+
+# Builds pre-built NIF binaries on tag push and attaches them to the matching
+# GitHub Release. The Hex package's c_src/build_nif.sh fetches from this URL
+# at consumer compile time. After this workflow finishes, the maintainer
+# publishes the Hex package separately via `make hex-package && rebar3 hex
+# publish`.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.triplet }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            triplet: x86_64-apple-darwin
+            ext: dylib
+          - os: macos-14
+            triplet: aarch64-apple-darwin
+            ext: dylib
+          - os: ubuntu-24.04
+            triplet: x86_64-unknown-linux-gnu
+            ext: so
+          - os: ubuntu-24.04-arm
+            triplet: aarch64-unknown-linux-gnu
+            ext: so
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libsodium openssl@3 cmake pkg-config
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev libssl-dev cmake build-essential pkg-config
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '26.2.4'
+          rebar3-version: '3.22.0'
+
+      - name: Build NIF
+        run: make build
+
+      - name: Smoke-test loaded NIF
+        run: |
+          rebar3 as test compile
+          DYLD_LIBRARY_PATH=/opt/homebrew/opt/openssl@3/lib:/usr/local/opt/openssl@3/lib \
+          erl -noshell \
+              -pa _build/test/lib/libsignal_protocol_nif/ebin \
+              -eval 'ok = libsignal_protocol_nif:init(), {ok, _} = libsignal_protocol_nif:generate_identity_key_pair(), halt().'
+
+      - name: Package binary
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          NAME="libsignal_protocol_nif-${{ matrix.triplet }}-${VERSION}"
+          mkdir -p "release/${NAME}"
+          cp "priv/signal_nif.${{ matrix.ext }}" "release/${NAME}/"
+          cp "priv/libsignal_protocol_nif.${{ matrix.ext }}" "release/${NAME}/"
+          tar -czf "release/${NAME}.tar.gz" -C release "${NAME}"
+          (cd release && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+          ls -lh release/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.triplet }}
+          path: |
+            release/*.tar.gz
+            release/*.sha256
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Combine checksums
+        working-directory: release
+        run: |
+          cat *.sha256 > CHECKSUMS.txt
+          rm *.sha256
+          ls -lh
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          NOTES="Pre-built NIF binaries for ${TAG}. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${TAG}/CHANGELOG.md) for release notes.
+
+          Triplets included:
+          - aarch64-apple-darwin (macOS Apple Silicon)
+          - x86_64-apple-darwin (macOS Intel)
+          - aarch64-unknown-linux-gnu (Linux ARM64)
+          - x86_64-unknown-linux-gnu (Linux x86_64)
+
+          The Hex package fetches the matching tarball at \`rebar3 compile\` time via \`c_src/build_nif.sh\`. Set \`LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1\` to opt out and build via cmake instead."
+
+          if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              echo "Release ${TAG} already exists; uploading assets."
+              gh release upload "${TAG}" \
+                  --repo "${{ github.repository }}" \
+                  --clobber \
+                  release/*.tar.gz \
+                  release/CHECKSUMS.txt
+          else
+              echo "Creating release ${TAG}."
+              gh release create "${TAG}" \
+                  --repo "${{ github.repository }}" \
+                  --title "${TAG}" \
+                  --notes "${NOTES}" \
+                  release/*.tar.gz \
+                  release/CHECKSUMS.txt
+          fi

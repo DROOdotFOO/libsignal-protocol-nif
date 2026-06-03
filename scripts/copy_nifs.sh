@@ -52,6 +52,9 @@ if [ "$nif_files_found" = false ]; then
     
     cmake . -DCMAKE_BUILD_TYPE=Release
     make
+    # cmake runs in-tree here; clean its droppings so they don't leak into
+    # rebar3 hex tarballs the next time someone runs `rebar3 hex build`.
+    rm -rf CMakeFiles CMakeCache.txt cmake_install.cmake Makefile
     cd "$PROJECT_ROOT"
     
     # Check again if build succeeded
