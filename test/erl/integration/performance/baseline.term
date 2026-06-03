@@ -1,0 +1,49 @@
+%% Performance baseline. Regenerate with `make perf-baseline`.
+#{pksm_roundtrip =>
+      #{min => 11,throughput => 83892,mean => 11,n => 200,p50 => 12,p95 => 12,
+        p99 => 14},
+  dr_decrypt =>
+      #{min => 9,throughput => 98911,mean => 10,n => 200,p50 => 10,p95 => 10,
+        p99 => 11},
+  dr_encrypt =>
+      #{min => 11,throughput => 84602,mean => 11,n => 200,p50 => 12,p95 => 12,
+        p99 => 20},
+  dr_init =>
+      #{min => 134,throughput => 7285,mean => 137,n => 200,p50 => 136,
+        p95 => 147,p99 => 162},
+  x3dh_process_bundle =>
+      #{min => 249,throughput => 3884,mean => 257,n => 200,p50 => 252,
+        p95 => 281,p99 => 341},
+  aes_gcm_decrypt_1k =>
+      #{min => 1,throughput => 231053,mean => 4,n => 1000,p50 => 2,p95 => 3,
+        p99 => 10},
+  aes_gcm_encrypt_16k =>
+      #{min => 21,throughput => 41464,mean => 24,n => 1000,p50 => 24,
+        p95 => 25,p99 => 30},
+  aes_gcm_encrypt_1k =>
+      #{min => 1,throughput => 602409,mean => 1,n => 1000,p50 => 2,p95 => 2,
+        p99 => 3},
+  aes_gcm_encrypt_64 =>
+      #{min => 0,throughput => 4115226,mean => 0,n => 1000,p50 => 0,p95 => 1,
+        p99 => 1},
+  ed25519_verify =>
+      #{min => 44,throughput => 21883,mean => 45,n => 1000,p50 => 45,
+        p95 => 49,p99 => 57},
+  ed25519_sign =>
+      #{min => 16,throughput => 59004,mean => 16,n => 1000,p50 => 17,
+        p95 => 18,p99 => 21},
+  hmac_sha256_1k =>
+      #{min => 3,throughput => 270599,mean => 3,n => 10000,p50 => 3,p95 => 4,
+        p99 => 8},
+  sha512_1k =>
+      #{min => 2,throughput => 373929,mean => 2,n => 10000,p50 => 2,p95 => 3,
+        p99 => 6},
+  sha256_1k =>
+      #{min => 3,throughput => 176183,mean => 5,n => 10000,p50 => 4,p95 => 8,
+        p99 => 21},
+  curve25519_keygen =>
+      #{min => 16,throughput => 53395,mean => 18,n => 10000,p50 => 17,
+        p95 => 22,p99 => 54},
+  ed25519_keygen =>
+      #{min => 16,throughput => 50466,mean => 19,n => 10000,p50 => 17,
+        p95 => 30,p99 => 66}}.
