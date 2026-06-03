@@ -30,12 +30,10 @@ if [ -f "${PROJECT_ROOT}/VERSION" ]; then
 fi
 
 # Skip everything if the NIF binaries are already in priv/.
-for ext in so dylib; do
-    if [ -f "${PROJECT_ROOT}/priv/signal_nif.${ext}" ] && \
-       [ -f "${PROJECT_ROOT}/priv/libsignal_protocol_nif.${ext}" ]; then
-        exit 0
-    fi
-done
+if [ -f "${PROJECT_ROOT}/priv/signal_nif.so" ] && \
+   [ -f "${PROJECT_ROOT}/priv/libsignal_protocol_nif.so" ]; then
+    exit 0
+fi
 
 mkdir -p "${PROJECT_ROOT}/priv"
 
@@ -45,12 +43,15 @@ MACHINE="$(uname -m)"
 TRIPLET=""
 EXT=""
 case "${SYSTEM}-${MACHINE}" in
-    Darwin-arm64)   TRIPLET="aarch64-apple-darwin";      EXT="dylib" ;;
-    Darwin-x86_64)  TRIPLET="x86_64-apple-darwin";       EXT="dylib" ;;
-    Linux-aarch64)  TRIPLET="aarch64-unknown-linux-gnu"; EXT="so" ;;
-    Linux-arm64)    TRIPLET="aarch64-unknown-linux-gnu"; EXT="so" ;;
-    Linux-x86_64)   TRIPLET="x86_64-unknown-linux-gnu";  EXT="so" ;;
+    Darwin-arm64)   TRIPLET="aarch64-apple-darwin" ;;
+    Darwin-x86_64)  TRIPLET="x86_64-apple-darwin" ;;
+    Linux-aarch64)  TRIPLET="aarch64-unknown-linux-gnu" ;;
+    Linux-arm64)    TRIPLET="aarch64-unknown-linux-gnu" ;;
+    Linux-x86_64)   TRIPLET="x86_64-unknown-linux-gnu" ;;
 esac
+
+# NIFs emit .so on every platform we support (BEAM looks for .so on macOS too).
+EXT="so"
 
 # Try the pre-built download unless explicitly opted out.
 if [ -n "${TRIPLET}" ] && [ -n "${VERSION}" ] && \

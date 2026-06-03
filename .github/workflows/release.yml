@@ -29,16 +29,24 @@ jobs:
         include:
           - os: macos-13
             triplet: x86_64-apple-darwin
-            ext: dylib
+            image_os: macos13
           - os: macos-14
             triplet: aarch64-apple-darwin
-            ext: dylib
+            image_os: macos14
           - os: ubuntu-24.04
             triplet: x86_64-unknown-linux-gnu
-            ext: so
+            image_os: ubuntu24
           - os: ubuntu-24.04-arm
             triplet: aarch64-unknown-linux-gnu
-            ext: so
+            image_os: ubuntu24
+
+    # NIFs on macOS emit .so (not .dylib) to match what BEAM looks for; see
+    # CLAUDE.md. Treat .so as the universal extension across all four targets.
+    env:
+      NIF_EXT: so
+      # erlef/setup-beam@v1 can't auto-map the ubuntu24-arm64 ImageOS env var,
+      # so we set it explicitly here for every matrix entry.
+      ImageOS: ${{ matrix.image_os }}
 
     steps:
       - uses: actions/checkout@v5
@@ -79,8 +87,8 @@ jobs:
           VERSION="${TAG#v}"
           NAME="libsignal_protocol_nif-${{ matrix.triplet }}-${VERSION}"
           mkdir -p "release/${NAME}"
-          cp "priv/signal_nif.${{ matrix.ext }}" "release/${NAME}/"
-          cp "priv/libsignal_protocol_nif.${{ matrix.ext }}" "release/${NAME}/"
+          cp "priv/signal_nif.${NIF_EXT}" "release/${NAME}/"
+          cp "priv/libsignal_protocol_nif.${NIF_EXT}" "release/${NAME}/"
           tar -czf "release/${NAME}.tar.gz" -C release "${NAME}"
           (cd release && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
           ls -lh release/
