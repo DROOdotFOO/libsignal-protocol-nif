@@ -70,8 +70,7 @@ pub fn pksm_first_message_test() {
 
   // Mint Bob's signed pre-key ourselves so we retain the private half.
   let assert Ok(#(spk_pub, spk_priv)) = generate_curve25519_keypair()
-  let assert <<bob_seed:bytes-size(32), _:bits>> = bob_keys.private_key
-  let assert Ok(signature) = sign_data(bob_seed, spk_pub)
+  let assert Ok(signature) = sign_data(bob_keys.private_key, spk_pub)
 
   // PreKeyBundle's pre_key field is required by the type; with the no-OPK
   // path under test we still supply it but it isn't fed into Bob X3DH.
