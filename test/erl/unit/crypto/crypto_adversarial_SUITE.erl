@@ -234,7 +234,7 @@ adv_aes_gcm_decrypt_plaintext_len_underflow(_) ->
     ?assertEqual([], Findings).
 
 %% ============================================================================
-%% Ed25519 sign with wrong-sized private key -- 32 bytes expected
+%% Ed25519 sign with wrong-sized private key -- 64 bytes expected
 %% ============================================================================
 
 adv_ed25519_sign_wrong_privkey_size(_) ->

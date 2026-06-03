@@ -51,12 +51,11 @@ build_bundle() ->
 %% Same as build_bundle/0 but also returns the SPK private key, so the test
 %% can reconstruct Bob's side of X3DH. The NIF's generate_signed_pre_key/2
 %% destroys the SPK priv, so we mint the SPK keypair ourselves and sign with
-%% signal_nif:sign_data/2 (which takes the 32B Ed25519 seed).
+%% signal_nif:sign_data/2.
 build_bundle_with_spk_priv() ->
     {ok, {BobIdPub, BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
     {ok, {SpkPub, SpkPriv}} = signal_nif:generate_curve25519_keypair(),
-    BobIdSeed = binary:part(BobIdPriv, 0, 32),
-    {ok, Signature} = signal_nif:sign_data(BobIdSeed, SpkPub),
+    {ok, Signature} = signal_nif:sign_data(BobIdPriv, SpkPub),
     Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary>>,
     {Bundle, BobIdPub, BobIdPriv, SpkPub, SpkPriv}.
 

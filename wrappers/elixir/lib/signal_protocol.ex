@@ -26,13 +26,14 @@ defmodule SignalProtocol do
   Performs X3DH key agreement against a remote pre-key bundle.
 
   The bundle is a binary in the format expected by the C NIF:
-  `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(32)`
+  `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)`
   with an optional trailing `one_time_prekey(32)`. The signature is
-  `HMAC-SHA256(signed_prekey_pub, key=remote_identity_pub)`.
+  Ed25519 (`crypto_sign_detached`) over `signed_prekey_pub` under the
+  remote identity key.
 
-  Returns `{:ok, {shared_secret(64), ephemeral_pub(32)}}` on success. The
-  shared secret is suitable to feed into `init_double_ratchet/5` as the
-  Double Ratchet root seed.
+  Returns `{:ok, {shared_secret(96), ephemeral_pub(32)}}` on success.
+  The 96-byte shared secret is `X3DH_SK(64) || DR_HE_seed(32)` and is fed
+  directly into `init_double_ratchet/5` as the Double Ratchet root seed.
   """
   @spec process_pre_key_bundle(binary(), binary()) ::
           {:ok, {binary(), binary()}} | {:error, term()}

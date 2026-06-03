@@ -49,12 +49,13 @@ test_curve25519_keypair(_Config) ->
     ok.
 
 test_ed25519_keypair(_Config) ->
-    % Test Ed25519 key pair generation
+    % Test Ed25519 key pair generation. Priv is the 64-byte libsodium SK
+    % (seed || derived pub).
     {ok, {PublicKey, PrivateKey}} = signal_nif:generate_ed25519_keypair(),
     ?assert(is_binary(PublicKey)),
     ?assert(is_binary(PrivateKey)),
     ?assertEqual(32, byte_size(PublicKey)),
-    ?assertEqual(32, byte_size(PrivateKey)),
+    ?assertEqual(64, byte_size(PrivateKey)),
     ?assertNotEqual(PublicKey, PrivateKey),
     ok.
 

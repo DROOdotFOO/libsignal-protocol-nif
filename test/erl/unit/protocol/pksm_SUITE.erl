@@ -46,8 +46,7 @@ bob_prepare(WithOpk) ->
     %% Mint the SPK keypair ourselves so we retain the SPK priv. The NIF's
     %% generate_signed_pre_key/2 destroys the priv.
     {ok, {SpkPub, SpkPriv}} = signal_nif:generate_curve25519_keypair(),
-    BobIdSeed = binary:part(BobIdPriv, 0, 32),
-    {ok, Signature} = signal_nif:sign_data(BobIdSeed, SpkPub),
+    {ok, Signature} = signal_nif:sign_data(BobIdPriv, SpkPub),
     case WithOpk of
         true ->
             {ok, {OpkPub, OpkPriv}} = signal_nif:generate_curve25519_keypair(),

@@ -80,12 +80,15 @@ static ERL_NIF_TERM generate_ed25519_keypair(ErlNifEnv *env, int argc, const ERL
     }
     
     ERL_NIF_TERM private_term, public_term;
-    // Ed25519 private key seed is the first 32 bytes of the 64-byte private key
-    unsigned char *private_data = enif_make_new_binary(env, 32, &private_term);
-    unsigned char *public_data = enif_make_new_binary(env, crypto_sign_PUBLICKEYBYTES, &public_term);
-    
-    // Extract the seed (first 32 bytes) from the private key
-    memcpy(private_data, private_key, 32);
+    // Return the full 64-byte libsodium secret key (seed || derived pub).
+    // This matches libsignal_protocol_nif:generate_identity_key_pair and the
+    // representation expected by sign_data/2 and ed25519_sk_to_curve25519/1.
+    unsigned char *private_data =
+        enif_make_new_binary(env, crypto_sign_SECRETKEYBYTES, &private_term);
+    unsigned char *public_data =
+        enif_make_new_binary(env, crypto_sign_PUBLICKEYBYTES, &public_term);
+
+    memcpy(private_data, private_key, crypto_sign_SECRETKEYBYTES);
     memcpy(public_data, public_key, crypto_sign_PUBLICKEYBYTES);
     
     // Clear sensitive data from stack
@@ -107,33 +110,24 @@ static ERL_NIF_TERM sign_data(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
         return enif_make_badarg(env);
     }
     
-    // Validate private key size (expecting 32-byte seed)
-    if (private_key.size != 32) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+    // Validate private key size (64-byte libsodium SK: seed || derived pub).
+    if (private_key.size != crypto_sign_SECRETKEYBYTES) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_private_key"));
     }
-    
-    // Convert 32-byte seed to 64-byte private key
-    unsigned char full_private_key[crypto_sign_SECRETKEYBYTES];
-    unsigned char public_key_temp[crypto_sign_PUBLICKEYBYTES];
-    crypto_sign_seed_keypair(public_key_temp, full_private_key, private_key.data);
-    
-    // Sign the message
+
     unsigned char signature[crypto_sign_BYTES];
     unsigned long long signature_len;
-    
-    if (crypto_sign_detached(signature, &signature_len, message.data, message.size, full_private_key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+
+    if (crypto_sign_detached(signature, &signature_len, message.data, message.size, private_key.data) != 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "signing_failed"));
     }
     
     ERL_NIF_TERM signature_term;
     unsigned char *signature_data = enif_make_new_binary(env, signature_len, &signature_term);
     memcpy(signature_data, signature, signature_len);
-    
-    // Clear sensitive data
-    sodium_memzero(full_private_key, sizeof(full_private_key));
-    
+
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), signature_term);
 }
 
