@@ -63,7 +63,7 @@ WORKDIR /app
 # Copy only the necessary files for production
 COPY --from=erlang-build /app/priv ./priv
 COPY --from=erlang-build /app/_build/default ./
-COPY --from=erlang-build /app/erl_src ./erl_src
+COPY --from=erlang-build /app/src ./src
 COPY --from=erlang-build /app/rebar.config ./
 
 # Create non-root user
