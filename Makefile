@@ -68,11 +68,16 @@ ci-build: check-project-root $(BUILD_DIR)
 # Clean build artifacts. CMake currently runs in-tree (see `build` target), so
 # Cache + Makefile + CMakeFiles/ + cmake_install.cmake land in c_src/ alongside
 # the sources. Wipe them too so they don't leak into `rebar3 hex build` tarballs.
+# Also wipe wrappers/*/priv/*.so to prevent stale NIFs from previous builds
+# masking NIF-API changes during local wrapper tests -- CI uses `cp -f` to
+# overwrite, but locally there's no auto-refresh so they go stale.
 clean: check-project-root
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
 	rm -rf priv/*.so priv/*.dylib priv/*.dll
 	rm -rf c_src/CMakeFiles c_src/CMakeCache.txt c_src/cmake_install.cmake c_src/Makefile
+	rm -f wrappers/elixir/priv/*.so wrappers/elixir/priv/*.dylib
+	rm -f wrappers/gleam/priv/*.so wrappers/gleam/priv/*.dylib
 	@echo "Cleanup completed!"
 
 # Clean test artifacts
