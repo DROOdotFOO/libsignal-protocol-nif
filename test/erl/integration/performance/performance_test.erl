@@ -19,7 +19,6 @@
 
 -define(REPORT_PATH, "tmp/performance_report.txt").
 -define(BASELINE_PATH, "test/erl/integration/performance/baseline.term").
-
 -define(WARMUP, 10).
 -define(WARN_PCT, 10).
 -define(REGRESSION_PCT, 20).
@@ -36,7 +35,8 @@ run() ->
     write_text_report(Results),
     ok.
 
-run_benchmarks() -> run().
+run_benchmarks() ->
+    run().
 
 quick() ->
     init_lib(),
@@ -56,32 +56,35 @@ baseline() ->
 %% ---------------------------------------------------------------------------
 
 bench_list() ->
-    [
-        %% Primitives -- fast (< 50us)
-        {ed25519_keygen,     fast, fun noop_setup/1,         fun ed25519_keygen_iter/1},
-        {curve25519_keygen,  fast, fun noop_setup/1,         fun curve25519_keygen_iter/1},
-        {sha256_1k,          fast, fun sha_setup/1,          fun sha256_iter/1},
-        {sha512_1k,          fast, fun sha_setup/1,          fun sha512_iter/1},
-        {hmac_sha256_1k,     fast, fun hmac_setup/1,         fun hmac_iter/1},
+    [%% Primitives -- fast (< 50us)
+     {ed25519_keygen, fast, fun noop_setup/1, fun ed25519_keygen_iter/1},
+     {curve25519_keygen, fast, fun noop_setup/1, fun curve25519_keygen_iter/1},
+     {sha256_1k, fast, fun sha_setup/1, fun sha256_iter/1},
+     {sha512_1k, fast, fun sha_setup/1, fun sha512_iter/1},
+     {hmac_sha256_1k, fast, fun hmac_setup/1, fun hmac_iter/1},
+     %% Primitives -- med (50us - 500us)
+     {ed25519_sign, med, fun ed25519_sign_setup/1, fun ed25519_sign_iter/1},
+     {ed25519_verify, med, fun ed25519_verify_setup/1, fun ed25519_verify_iter/1},
+     {aes_gcm_encrypt_64, med, fun(_) -> aes_setup(64) end, fun aes_encrypt_iter/1},
+     {aes_gcm_encrypt_1k, med, fun(_) -> aes_setup(1024) end, fun aes_encrypt_iter/1},
+     {aes_gcm_encrypt_16k, med, fun(_) -> aes_setup(16384) end, fun aes_encrypt_iter/1},
+     {aes_gcm_decrypt_1k, med, fun(_) -> aes_dec_setup(1024) end, fun aes_decrypt_iter/1},
+     %% Protocol -- slow (> 500us)
+     {x3dh_process_bundle, slow, fun(_) -> x3dh_setup() end, fun x3dh_iter/1},
+     {dr_init, slow, fun(_) -> dr_init_setup() end, fun dr_init_iter/1},
+     {dr_encrypt, slow, fun dr_encrypt_setup/1, fun dr_encrypt_iter/1},
+     {dr_decrypt, slow, fun dr_decrypt_setup/1, fun dr_decrypt_iter/1},
+     {pksm_roundtrip, slow, fun(_) -> pksm_setup() end, fun pksm_iter/1}].
 
-        %% Primitives -- med (50us - 500us)
-        {ed25519_sign,       med,  fun ed25519_sign_setup/1, fun ed25519_sign_iter/1},
-        {ed25519_verify,     med,  fun ed25519_verify_setup/1, fun ed25519_verify_iter/1},
-        {aes_gcm_encrypt_64, med,  fun(_) -> aes_setup(64) end, fun aes_encrypt_iter/1},
-        {aes_gcm_encrypt_1k, med,  fun(_) -> aes_setup(1024) end, fun aes_encrypt_iter/1},
-        {aes_gcm_encrypt_16k,med,  fun(_) -> aes_setup(16384) end, fun aes_encrypt_iter/1},
-        {aes_gcm_decrypt_1k, med,  fun(_) -> aes_dec_setup(1024) end, fun aes_decrypt_iter/1},
+full_counts() ->
+    #{fast => 10000,
+      med => 1000,
+      slow => 200}.
 
-        %% Protocol -- slow (> 500us)
-        {x3dh_process_bundle, slow, fun(_) -> x3dh_setup() end, fun x3dh_iter/1},
-        {dr_init,             slow, fun(_) -> dr_init_setup() end, fun dr_init_iter/1},
-        {dr_encrypt,          slow, fun dr_encrypt_setup/1,   fun dr_encrypt_iter/1},
-        {dr_decrypt,          slow, fun dr_decrypt_setup/1,   fun dr_decrypt_iter/1},
-        {pksm_roundtrip,      slow, fun(_) -> pksm_setup() end, fun pksm_iter/1}
-    ].
-
-full_counts()  -> #{fast => 10000, med => 1000, slow => 200}.
-quick_counts() -> #{fast =>   100, med =>   50, slow =>  20}.
+quick_counts() ->
+    #{fast => 100,
+      med => 50,
+      slow => 20}.
 
 %% ---------------------------------------------------------------------------
 %% Driver
@@ -98,7 +101,8 @@ run_bench(Name, Speed, SetupFun, IterFun, Counts) ->
     {Samples, _} = measure_iters(IterFun, Ctx1, N, []),
     {Name, stats(Samples, N)}.
 
-run_iters(_Fun, Ctx, 0) -> Ctx;
+run_iters(_Fun, Ctx, 0) ->
+    Ctx;
 run_iters(Fun, Ctx, N) ->
     Ctx2 = Fun(Ctx),
     run_iters(Fun, Ctx2, N - 1).
@@ -118,23 +122,23 @@ measure_iters(Fun, Ctx, N, Acc) ->
 stats(Samples, N) ->
     Sorted = lists:sort(Samples),
     Total = lists:sum(Samples),
-    #{
-        n          => N,
-        min        => hd(Sorted),
-        p50        => percentile(Sorted, 50),
-        p95        => percentile(Sorted, 95),
-        p99        => percentile(Sorted, 99),
-        mean       => Total div max(1, N),
-        throughput => throughput(N, Total)
-    }.
+    #{n => N,
+      min => hd(Sorted),
+      p50 => percentile(Sorted, 50),
+      p95 => percentile(Sorted, 95),
+      p99 => percentile(Sorted, 99),
+      mean => Total div max(1, N),
+      throughput => throughput(N, Total)}.
 
 percentile(Sorted, P) ->
     Len = length(Sorted),
     Idx = max(1, min(Len, (P * Len + 99) div 100)),
     lists:nth(Idx, Sorted).
 
-throughput(_N, 0)     -> 0;
-throughput(N, TotalUs) -> N * 1000000 div TotalUs.
+throughput(_N, 0) ->
+    0;
+throughput(N, TotalUs) ->
+    N * 1000000 div TotalUs.
 
 %% ---------------------------------------------------------------------------
 %% Reporting
@@ -146,7 +150,12 @@ report(Results, Baseline) ->
     io:nl().
 
 report_one({Name, Stats}, Baseline) ->
-    #{min := Mn, p50 := P50, p95 := P95, p99 := P99, throughput := T} = Stats,
+    #{min := Mn,
+      p50 := P50,
+      p95 := P95,
+      p99 := P99,
+      throughput := T} =
+        Stats,
     Tag = delta_tag(Name, Stats, Baseline),
     io:format("  ~-22s  min ~6w us  p50 ~6w us  p95 ~6w us  p99 ~6w us  thr ~10w/s  ~s~n",
               [Name, Mn, P50, P95, P99, T, Tag]).
@@ -155,11 +164,13 @@ delta_tag(_, _, undefined) ->
     "";
 delta_tag(Name, #{throughput := T}, Baseline) ->
     case maps:find(Name, Baseline) of
-        error -> "[new]";
+        error ->
+            "[new]";
         {ok, #{throughput := T0}} when T0 > 0 ->
             DeltaPct = (T - T0) * 100 div T0,
             format_delta(DeltaPct);
-        _ -> ""
+        _ ->
+            ""
     end.
 
 format_delta(D) when D >= -?WARN_PCT ->
@@ -169,20 +180,31 @@ format_delta(D) when D >= -?REGRESSION_PCT ->
 format_delta(D) ->
     io_lib:format("[REGRESSION ~s~w%]", [sign(D), D]).
 
-sign(D) when D > 0 -> "+";
-sign(_)            -> "".
+sign(D) when D > 0 ->
+    "+";
+sign(_) ->
+    "".
 
 write_text_report(Results) ->
     filelib:ensure_dir(?REPORT_PATH),
     {ok, F} = file:open(?REPORT_PATH, [write]),
     io:format(F, "Signal Protocol performance benchmarks~n", []),
-    io:format(F, "Generated: ~s~n~n",
-              [calendar:system_time_to_rfc3339(erlang:system_time(second))]),
+    io:format(F,
+              "Generated: ~s~n~n",
+              [calendar:system_time_to_rfc3339(
+                   erlang:system_time(second))]),
     lists:foreach(fun({Name, S}) ->
-        #{min := Mn, p50 := P50, p95 := P95, p99 := P99, throughput := T} = S,
-        io:format(F, "~-24s  min=~wus  p50=~wus  p95=~wus  p99=~wus  thr=~w/s~n",
-                  [Name, Mn, P50, P95, P99, T])
-    end, Results),
+                     #{min := Mn,
+                       p50 := P50,
+                       p95 := P95,
+                       p99 := P99,
+                       throughput := T} =
+                         S,
+                     io:format(F,
+                               "~-24s  min=~wus  p50=~wus  p95=~wus  p99=~wus  thr=~w/s~n",
+                               [Name, Mn, P50, P95, P99, T])
+                  end,
+                  Results),
     file:close(F),
     io:format("Report written to ~s~n", [?REPORT_PATH]).
 
@@ -192,15 +214,17 @@ write_text_report(Results) ->
 
 load_baseline() ->
     case file:consult(?BASELINE_PATH) of
-        {ok, [Baseline]} when is_map(Baseline) -> Baseline;
-        _ -> undefined
+        {ok, [Baseline]} when is_map(Baseline) ->
+            Baseline;
+        _ ->
+            undefined
     end.
 
 write_baseline(Results) ->
     Map = maps:from_list(Results),
-    Body = io_lib:format(
-        "%% Performance baseline. Regenerate with `make perf-baseline`.~n~p.~n",
-        [Map]),
+    Body =
+        io_lib:format("%% Performance baseline. Regenerate with `make perf-baseline`.~n~p.~n",
+                      [Map]),
     filelib:ensure_dir(?BASELINE_PATH),
     file:write_file(?BASELINE_PATH, iolist_to_binary(Body)).
 
@@ -215,7 +239,8 @@ init_lib() ->
 %% Benchmarks: primitives
 %% ---------------------------------------------------------------------------
 
-noop_setup(_) -> undefined.
+noop_setup(_) ->
+    undefined.
 
 ed25519_keygen_iter(_) ->
     {ok, _} = signal_nif:generate_ed25519_keypair(),
@@ -292,20 +317,20 @@ aes_decrypt_iter({K, IV, Ct, Tag, Len} = Ctx) ->
 
 derive_x3dh() ->
     {ok, {AlicePub, AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {BobPub, BobPriv}}     = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {SpkPub, _}}           = signal_nif:generate_curve25519_keypair(),
-    {ok, Sig}                   = signal_nif:sign_data(BobPriv, SpkPub),
-    {ok, {OpkPub, _}}           = signal_nif:generate_curve25519_keypair(),
+    {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {SpkPub, _}} = signal_nif:generate_curve25519_keypair(),
+    {ok, Sig} = signal_nif:sign_data(BobPriv, SpkPub),
+    {ok, {OpkPub, _}} = signal_nif:generate_curve25519_keypair(),
     Bundle = <<BobPub/binary, SpkPub/binary, Sig/binary, OpkPub/binary>>,
     {ok, {SK, Eph}} = libsignal_protocol_nif:process_pre_key_bundle(AlicePriv, Bundle),
     {SK, AlicePub, BobPub, BobPriv, Eph}.
 
 x3dh_setup() ->
     {ok, {_AlicePub, AlicePriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {BobPub, BobPriv}}      = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {SpkPub, _}}            = signal_nif:generate_curve25519_keypair(),
-    {ok, Sig}                    = signal_nif:sign_data(BobPriv, SpkPub),
-    {ok, {OpkPub, _}}            = signal_nif:generate_curve25519_keypair(),
+    {ok, {BobPub, BobPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
+    {ok, {SpkPub, _}} = signal_nif:generate_curve25519_keypair(),
+    {ok, Sig} = signal_nif:sign_data(BobPriv, SpkPub),
+    {ok, {OpkPub, _}} = signal_nif:generate_curve25519_keypair(),
     Bundle = <<BobPub/binary, SpkPub/binary, Sig/binary, OpkPub/binary>>,
     {AlicePriv, Bundle}.
 
@@ -333,19 +358,20 @@ dr_encrypt_iter(S) ->
 dr_decrypt_setup(N) ->
     {SK, A, B, BobPriv, _} = derive_x3dh(),
     {ok, AliceS} = libsignal_protocol_nif:dr_init(SK, A, B, <<>>, 1),
-    {ok, BobS}   = libsignal_protocol_nif:dr_init(SK, B, A, BobPriv, 0),
+    {ok, BobS} = libsignal_protocol_nif:dr_init(SK, B, A, BobPriv, 0),
     %% Establish: Alice -> Bob, in order.
     {ok, {Ct1, AliceS1}} = libsignal_protocol_nif:dr_encrypt(AliceS, <<"first">>),
-    {ok, {_, BobS1}}     = libsignal_protocol_nif:dr_decrypt(BobS, Ct1),
+    {ok, {_, BobS1}} = libsignal_protocol_nif:dr_decrypt(BobS, Ct1),
     %% Pre-generate one ciphertext per (warmup + measured) iteration so the
     %% iter loop only times the decrypt call.
     Total = N + ?WARMUP,
-    {Cts, _} = lists:mapfoldl(
-        fun(_, S) ->
-            {ok, {C, S2}} = libsignal_protocol_nif:dr_encrypt(S, <<"benchmark">>),
-            {C, S2}
-        end,
-        AliceS1, lists:seq(1, Total)),
+    {Cts, _} =
+        lists:mapfoldl(fun(_, S) ->
+                          {ok, {C, S2}} = libsignal_protocol_nif:dr_encrypt(S, <<"benchmark">>),
+                          {C, S2}
+                       end,
+                       AliceS1,
+                       lists:seq(1, Total)),
     {BobS1, Cts}.
 
 dr_decrypt_iter({BobS, [Ct | Rest]}) ->

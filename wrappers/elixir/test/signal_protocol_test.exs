@@ -79,8 +79,7 @@ defmodule SignalProtocolTest do
 
       # Mint Bob's SPK ourselves so we retain the private half.
       {:ok, {spk_pub, spk_priv}} = :signal_nif.generate_curve25519_keypair()
-      bob_seed = binary_part(bob_priv, 0, 32)
-      {:ok, signature} = :signal_nif.sign_data(bob_seed, spk_pub)
+      {:ok, signature} = :signal_nif.sign_data(bob_priv, spk_pub)
       bundle = bob_pub <> spk_pub <> signature
 
       {:ok, {sk, alice_eph_pub}} =

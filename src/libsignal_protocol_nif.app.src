@@ -1,4 +1,5 @@
-{application, libsignal_protocol_nif,
+{application,
+ libsignal_protocol_nif,
  [{description, "Signal Protocol cryptographic primitives NIF implementation"},
   {vsn, "0.2.0"},
   {registered, []},
@@ -6,5 +7,4 @@
   {env, []},
   {modules, []},
   {licenses, ["Apache-2.0"]},
-  {links, [{"GitHub", "https://github.com/Hydepwns/libsignal-protocol-nif"}]}
- ]}. 
+  {links, [{"GitHub", "https://github.com/Hydepwns/libsignal-protocol-nif"}]}]}.
