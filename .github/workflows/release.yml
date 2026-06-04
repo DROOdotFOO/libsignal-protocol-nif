@@ -27,9 +27,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
-            triplet: x86_64-apple-darwin
-            image_os: macos13
+          # macos-13 (x86_64-apple-darwin) dropped from the matrix: free-tier
+          # Intel Mac runners sit queued for hours and never pick up. Intel
+          # Mac users fall back to source build via c_src/build_nif.sh.
           - os: macos-14
             triplet: aarch64-apple-darwin
             image_os: macos14

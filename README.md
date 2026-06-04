@@ -62,14 +62,13 @@ Gleam (`gleam.toml`):
 libsignal_protocol_gleam = "~> 0.2"
 ```
 
-The Hex package ships sources only. At consumer `rebar3 compile` time, `c_src/build_nif.sh` fetches a pre-built NIF tarball from the matching GitHub Release for the consumer's platform. Supported triplets:
+The Hex package ships sources only. At consumer `rebar3 compile` time, `c_src/build_nif.sh` fetches a pre-built NIF tarball from the matching GitHub Release for the consumer's platform. Pre-built triplets:
 
 - `aarch64-apple-darwin` (macOS Apple Silicon)
-- `x86_64-apple-darwin` (macOS Intel)
 - `aarch64-unknown-linux-gnu` (Linux ARM64)
 - `x86_64-unknown-linux-gnu` (Linux x86_64)
 
-For any other platform, or when the download fails, the script falls back to a cmake source build. That requires libsodium + OpenSSL development headers + cmake on the system. Set `LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1` to skip the download attempt and go straight to the source path.
+For any other platform (including Intel Mac), or when the download fails, the script falls back to a cmake source build. That requires libsodium + OpenSSL development headers + cmake on the system. Set `LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1` to skip the download attempt and go straight to the source path.
 
 ## Erlang example
 
