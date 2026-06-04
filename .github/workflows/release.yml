@@ -134,11 +134,12 @@ jobs:
 
           Triplets included:
           - aarch64-apple-darwin (macOS Apple Silicon)
-          - x86_64-apple-darwin (macOS Intel)
           - aarch64-unknown-linux-gnu (Linux ARM64)
           - x86_64-unknown-linux-gnu (Linux x86_64)
 
-          The Hex package fetches the matching tarball at \`rebar3 compile\` time via \`c_src/build_nif.sh\`. Set \`LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1\` to opt out and build via cmake instead."
+          Intel Mac (x86_64-apple-darwin) is not pre-built; consumers on Intel Mac fall back to a cmake source build via \`c_src/build_nif.sh\` (requires cmake + libsodium + openssl headers).
+
+          Set \`LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1\` to opt out of the download path entirely."
 
           if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
               echo "Release ${TAG} already exists; uploading assets."
