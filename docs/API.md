@@ -57,13 +57,14 @@ ok = signal_nif:verify_signature(Ed25519Pub, Message, Sig).
 
 ## libsignal_protocol_nif
 
-Signal Protocol module. Call `init/0` once per VM before using anything else.
+Signal Protocol module. libsodium is initialised when the NIF loads (`-on_load`); a failed `sodium_init()` makes the module refuse to load, so no per-VM setup call is required.
 
 ### Lifecycle
 
 ```erlang
 ok = libsignal_protocol_nif:init().
-%% Initializes libsodium. Returns {error, libsodium_init_failed} on failure.
+%% Optional. Always returns ok once the module has loaded; kept for callers
+%% that want an explicit "is the NIF present" probe. Idempotent.
 ```
 
 ### Identity and pre-keys
@@ -195,7 +196,6 @@ Atoms the NIFs actually return today. Treat any unfamiliar atom as fatal; crypto
 
 | Atom                                                 | Origin                                     |
 | ---------------------------------------------------- | ------------------------------------------ |
-| `libsodium_init_failed`                              | `init/0`                                   |
 | `invalid_signature`, `signature_verification_failed` | sign/verify, X3DH                          |
 | `invalid_bundle`, `bundle_too_short`                 | `process_pre_key_bundle/2`                 |
 | `invalid_shared_secret_size`                         | `dr_init/5` (must be 96 bytes)             |

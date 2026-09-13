@@ -89,7 +89,7 @@ The `message` field carries the full inner DR `SignalMessage` (version byte + ou
 
 **Atom error vocabulary.** Every NIF returns `{ok, _} | {error, atom}`. Atoms are stable, cheap to pattern-match, and the Elixir wrapper mirrors them verbatim. The Gleam wrapper surfaces them as `Result(_, String)` because Gleam errors are strings.
 
-**No global state.** Both NIFs are stateless across calls. `init/0` on `libsignal_protocol_nif` only seeds libsodium's randomness pool. Idempotent.
+**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they are loaded independently (the Elixir wrapper never loads `signal_nif`), so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
 
 **Fail closed on load.** A failed `load_nif/0` returns `{error, _}` from `-on_load` so the module refuses to load. Prior to 0.2 a load failure printed a warning and returned `ok`, leaving stubs in place that would silently no-op cryptographic work. Removed.
 

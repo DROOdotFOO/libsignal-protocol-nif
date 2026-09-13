@@ -1,12 +1,14 @@
 #include <erl_nif.h>
-#include <stdlib.h>
-#include <time.h>
+#include <sodium.h>
 
 #include "dr.h"
 #include "keys.h"
 #include "pksm.h"
 #include "session.h"
 
+// libsodium is initialised in on_load (below); by the time any NIF in this
+// table is callable it has already succeeded, so init/0 is a no-op kept for
+// API compatibility. Calling it is harmless and idempotent.
 static ERL_NIF_TERM init_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     return enif_make_atom(env, "ok");
 }
@@ -29,10 +31,17 @@ static ErlNifFunc nif_funcs[] = {
     {"pksm_decode", 1, pksm_decode_nif, 0}
 };
 
+// This library is loaded independently of signal_nif (the Elixir wrapper
+// never loads signal_nif at all), so it must initialise libsodium itself:
+// randombytes_buf, crypto_box_keypair and the CPU-feature dispatch all
+// depend on it. sodium_init() is idempotent and safe to call from both
+// libraries. Returning non-zero makes -on_load fail, so the module refuses
+// to load rather than run uninitialised (fail closed).
 static int on_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
 {
-    // Initialize random seed
-    srand((unsigned int)time(NULL));
+    if (sodium_init() < 0) {
+        return -1;
+    }
     return 0;
 }
 
