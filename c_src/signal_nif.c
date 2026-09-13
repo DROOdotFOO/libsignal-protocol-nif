@@ -256,16 +256,23 @@ static ERL_NIF_TERM hmac_sha256(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
         return enif_make_badarg(env);
     }
     
-    // Generate HMAC-SHA256 using libsodium
-    unsigned char hmac[crypto_auth_BYTES];
-    if (crypto_auth(hmac, data.data, data.size, key.data) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+    // HMAC-SHA-256 with an arbitrary-length key (RFC 2104). crypto_auth()
+    // reads a fixed 32-byte key and would over-read shorter binaries; the
+    // streaming API hashes long keys and pads short ones as the RFC requires.
+    unsigned char hmac[crypto_auth_hmacsha256_BYTES];
+    crypto_auth_hmacsha256_state st;
+    if (crypto_auth_hmacsha256_init(&st, key.data, key.size) != 0 ||
+        crypto_auth_hmacsha256_update(&st, data.data, data.size) != 0 ||
+        crypto_auth_hmacsha256_final(&st, hmac) != 0) {
+        sodium_memzero(&st, sizeof(st));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "hmac_failed"));
     }
+    sodium_memzero(&st, sizeof(st));
     
     ERL_NIF_TERM hmac_term;
-    unsigned char *hmac_data = enif_make_new_binary(env, crypto_auth_BYTES, &hmac_term);
-    memcpy(hmac_data, hmac, crypto_auth_BYTES);
+    unsigned char *hmac_data = enif_make_new_binary(env, sizeof(hmac), &hmac_term);
+    memcpy(hmac_data, hmac, sizeof(hmac));
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), hmac_term);
 }
 
@@ -355,7 +362,8 @@ static ERL_NIF_TERM aes_gcm_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     if (key.size != crypto_aead_aes256gcm_KEYBYTES || 
         iv.size != crypto_aead_aes256gcm_NPUBBYTES ||
         tag.size != crypto_aead_aes256gcm_ABYTES ||
-        expected_plaintext_len != (int)ciphertext.size) {
+        expected_plaintext_len < 0 ||
+        (size_t)expected_plaintext_len != ciphertext.size) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"), 
                                enif_make_atom(env, "invalid_parameters"));
     }

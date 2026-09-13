@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **CRITICAL FIX**: `dr_decrypt` trial-decrypted the DR-HE `enc_header` into a fixed 64-byte stack buffer with no upper bound on the header length taken from the (not yet authenticated) outer envelope. A remote peer could send an oversized header and overwrite the receiver's stack before any MAC check. `dr_try_decrypt_header` now rejects any `enc_header` that is not exactly `DR_ENC_HEADER_LEN` (64 bytes -- the only length a legitimate sender can produce) and additionally checks the caller's output capacity; `dr_decrypt` rejects the length once, before any header key is touched, with `{error, malformed_message}`. New `dr_he_envelope_SUITE:wrong_size_enc_header_rejected` covers 48 B through 64 KiB headers.
+- `signal_nif:hmac_sha256/2` called libsodium's fixed-key `crypto_auth`, which always reads 32 key bytes: shorter keys caused an out-of-bounds read and longer keys were silently truncated. It now uses `crypto_auth_hmacsha256_{init,update,final}` with the caller's actual key length, so output matches RFC 2104 / OTP `crypto:mac/4` for every key size. `crypto_adversarial_SUITE:adv_hmac_key_lengths_rfc4231` pins RFC 4231 known answers plus empty/32/64-byte keys (it replaces `adv_hmac_empty_key`, which had documented the over-read as accepted behaviour).
+- `dr_aes_cbc_{encrypt,decrypt}` reject inputs larger than `INT_MAX` before the `int` cast into OpenSSL EVP; `signal_nif:aes_gcm_decrypt/6` compares `ExpectedPlaintextLen` against the ciphertext size as `size_t` after rejecting negatives.
+
 ## [0.2.0] - 2026-06-03
 
 The Signal Protocol primitives are rewritten against the on-the-wire spec: X3DH, the Double Ratchet, header encryption (DR-HE), and PreKeySignalMessage are all implemented and tested across 10 CT suites. The 0.1 line shipped an HMAC-based bundle signature forgeable from any published bundle; that's fixed with real Ed25519 identities. Numerous breaking changes -- DR session blobs, bundle binaries, and DR wire messages from any 0.1.x release will not interoperate.

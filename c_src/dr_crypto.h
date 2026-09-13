@@ -7,6 +7,14 @@
 // Signal-spec MAC truncation: HMAC-SHA-256 output keeps only the first 8 bytes.
 #define DR_MAC_LEN 8
 
+// Wire length of the DR-HE enc_header: iv(16) || AES-256-CBC(inner header).
+// The inner header protobuf is tag(1)+len(1)+ratchet_key(32) + tag(1)+
+// varint(1..5) + tag(1)+varint(1..5) = 38..46 bytes, so PKCS#7 always pads
+// it to exactly 48. Any other length on the wire is malformed and must be
+// rejected before any decryption is attempted.
+#define DR_INNER_HEADER_MAX 46
+#define DR_ENC_HEADER_LEN (16 + 48)
+
 // HKDF-SHA-256 (RFC 5869). Shared between DR (KDF_RK) and X3DH (root seed).
 int hkdf_sha256(unsigned char *output, size_t output_len,
                 const unsigned char *salt, size_t salt_len,
@@ -36,10 +44,12 @@ int dr_aes_cbc_decrypt(unsigned char *out_buf, size_t *out_len,
                        const unsigned char *key, const unsigned char *iv);
 
 // Trial-decrypt enc_header (`iv(16) || aes_cbc_ciphertext`) under a candidate
-// header_key. On valid PKCS#7 unpad AND successful inner-header protobuf parse,
-// fills *out_msg and returns 0. Returns -1 on any failure.
-// out_plain must have capacity >= enc_header_len - 16.
+// header_key. Rejects enc_header_len != DR_ENC_HEADER_LEN and any ciphertext
+// larger than out_plain_cap before touching the cipher. On valid PKCS#7 unpad
+// AND successful inner-header protobuf parse, fills *out_msg and returns 0.
+// Returns -1 on any failure.
 int dr_try_decrypt_header(unsigned char *out_plain,
+                          size_t out_plain_cap,
                           size_t *out_plain_len,
                           dr_message_t *out_msg,
                           const unsigned char *enc_header,

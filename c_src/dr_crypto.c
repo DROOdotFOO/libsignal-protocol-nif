@@ -124,6 +124,7 @@ int dr_aes_cbc_encrypt(unsigned char *out_buf, size_t *out_len,
     if (!ctx) return -1;
     int ok = 0;
     int len1 = 0, len2 = 0;
+    if (plaintext_len > INT_MAX) goto done;
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) goto done;
     if (EVP_EncryptUpdate(ctx, out_buf, &len1,
                           plaintext, (int)plaintext_len) != 1) goto done;
@@ -145,6 +146,7 @@ int dr_aes_cbc_decrypt(unsigned char *out_buf, size_t *out_len,
     if (!ctx) return -1;
     int ok = 0;
     int len1 = 0, len2 = 0;
+    if (ciphertext_len > INT_MAX) goto done;
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) goto done;
     if (EVP_DecryptUpdate(ctx, out_buf, &len1,
                           ciphertext, (int)ciphertext_len) != 1) goto done;
@@ -161,21 +163,27 @@ done:
 // encrypt and shipped with the ciphertext so the same header_key can be
 // reused safely across every message in a chain.
 //
+// enc_header_len is attacker-controlled (it comes straight out of the outer
+// envelope protobuf, before the MAC is checked), so it is pinned to the one
+// length a legitimate sender can produce and additionally bounded by the
+// caller's output capacity before any cipher call. EVP_DecryptUpdate writes
+// every block but the last regardless of key, so a size check after the
+// fact would be too late.
+//
 // On a valid PKCS#7 unpad AND a successful inner-header protobuf parse
 // (3 expected fields, 32B ratchet_key), fills *out and returns 0. Returns
 // -1 on size mismatch, AES-CBC failure, padding error, or malformed
 // inner protobuf.
-//
-// out_plain must have capacity >= enc_header_len - 16.
 int dr_try_decrypt_header(unsigned char *out_plain,
+                          size_t out_plain_cap,
                           size_t *out_plain_len,
                           dr_message_t *out_msg,
                           const unsigned char *enc_header,
                           size_t enc_header_len,
                           const unsigned char *header_key) {
-    if (enc_header_len < 16 + 16) return -1;
+    if (enc_header_len != DR_ENC_HEADER_LEN) return -1;
     size_t ct_len = enc_header_len - 16;
-    if ((ct_len % 16) != 0) return -1;
+    if (ct_len > out_plain_cap) return -1;
     const unsigned char *iv = enc_header;
     const unsigned char *ciphertext = enc_header + 16;
 

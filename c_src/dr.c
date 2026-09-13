@@ -482,6 +482,12 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (body_ct_len == 0 || (body_ct_len % 16) != 0) {
         err = "message_too_short"; goto cleanup;
     }
+    // A legitimate sender always emits exactly DR_ENC_HEADER_LEN bytes
+    // (see dr_crypto.h). Reject anything else here, before any header key
+    // is touched, so oversized headers cost no crypto work.
+    if (enc_header_len != DR_ENC_HEADER_LEN) {
+        err = "malformed_message"; goto cleanup;
+    }
 
     // Trial-decrypt enc_header under each candidate header_key.
     enum { PATH_CURRENT, PATH_RATCHET, PATH_SKIPPED } path = PATH_CURRENT;
@@ -491,13 +497,15 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int found = 0;
 
     if (hk_is_nonzero(state.header_key_recv) &&
-        dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+        dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                              &header_plain_len, &inner,
                               enc_header, enc_header_len,
                               state.header_key_recv) == 0) {
         path = PATH_CURRENT;
         found = 1;
     } else if (hk_is_nonzero(state.next_header_key_recv) &&
-               dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+               dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                                     &header_plain_len, &inner,
                                      enc_header, enc_header_len,
                                      state.next_header_key_recv) == 0) {
         path = PATH_RATCHET;
@@ -505,7 +513,8 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     } else {
         for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
             if (!state.mkskipped[i].occupied) continue;
-            if (dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+            if (dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                                      &header_plain_len, &inner,
                                       enc_header, enc_header_len,
                                       state.mkskipped[i].header_key) == 0) {
                 // Locate the slot matching this (header_key, counter) tuple.
