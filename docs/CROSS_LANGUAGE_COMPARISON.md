@@ -8,11 +8,11 @@ All three wrappers call the same C NIF. Crypto behavior is identical. Difference
 | --------------- | -------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
 | Hex package     | `libsignal_protocol_nif`               | `libsignal_protocol`                                                 | `libsignal_protocol_gleam`                   |
 | Entry module(s) | `signal_nif`, `libsignal_protocol_nif` | `SignalProtocol`, `LibsignalProtocol`, `SignalProtocol.PreKeyBundle` | `signal_protocol`, `pre_key_bundle`, `utils` |
-| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)`                          |
+| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)` as declared; see Errors  |
 | Test framework  | Common Test                            | ExUnit                                                               | gleeunit                                     |
 | Static analysis | Dialyzer                               | Dialyzer, Credo                                                      | Gleam compiler                               |
 
-The Elixir and Gleam wrappers expose the Signal Protocol surface (X3DH, Double Ratchet, PreKeySignalMessage) plus identity / pre-key generation. The simple ChaCha20-Poly1305 session API (`create_session/2`, `encrypt_message/2`, `decrypt_message/2`) is only on the Erlang NIF -- the wrappers dropped it because the legacy "session" naming was misleading; the real Signal flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`.
+The Elixir and Gleam wrappers expose the Signal Protocol surface (X3DH, Double Ratchet, PreKeySignalMessage) plus identity / pre-key generation. The simple ChaCha20-Poly1305 session API (`create_session/2`, `encrypt_message/2`, `decrypt_message/2`) is not exposed by the Gleam wrapper; Elixir still exposes `create_session/2` through `LibsignalProtocol` (slated for removal in 0.3). The real Signal flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`.
 
 For the lower-level primitives (`sha256/1`, `aes_gcm_encrypt/5`, `sign_data/2`, etc.) call `:signal_nif` directly from Elixir or `@external` to `signal_nif` from Gleam -- there are no wrapper modules around those.
 
@@ -56,8 +56,10 @@ bundle = <<bob_pub::binary, spk_pub::binary, spk_sig::binary, opk_pub::binary>>
 ```
 
 ```gleam
-// Gleam takes a typed PreKeyBundle; the wrapper serializes it for the NIF.
-let assert Ok(bundle) = pre_key_bundle.create(1, bob_pub, opk, spk, <<0>>)
+// Build the 128/160-byte NIF bundle layout directly. `pre_key_bundle.create`
+// produces a different, wrapper-local layout that the NIF rejects with
+// `invalid_bundle_size`; do not feed it to process_pre_key_bundle.
+let bundle = <<bob_pub:bits, spk_pub:bits, spk_sig:bits, opk_pub:bits>>
 let assert Ok(#(sk, alice_eph_pub)) =
   signal_protocol.process_pre_key_bundle(alice_priv, bundle)
 ```
@@ -87,12 +89,13 @@ The Erlang and Elixir APIs take an `IsAlice` integer (1 or 0). Gleam takes the t
 
 ## Errors
 
-The NIFs return atoms. Each wrapper preserves them in its idiom:
+The NIFs return atoms (see `API.md`, "Error atoms", for the full list). Erlang and Elixir preserve them:
 
 ```erlang
 case libsignal_protocol_nif:dr_decrypt(Session, Ct) of
     {ok, {Pt, S2}} -> ...;
-    {error, mac_verification_failed} -> ...;
+    {error, bad_mac} -> ...;
+    {error, too_many_skipped} -> ...;
     {error, Reason} -> ...
 end.
 ```
@@ -100,20 +103,12 @@ end.
 ```elixir
 case SignalProtocol.dr_decrypt_message(session, ct) do
   {:ok, {pt, s2}} -> ...
-  {:error, :mac_verification_failed} -> ...
+  {:error, :bad_mac} -> ...
   {:error, reason} -> ...
 end
 ```
 
-```gleam
-case signal_protocol.dr_decrypt_message(session, ct) {
-  Ok(#(pt, s2)) -> ...
-  Error("mac_verification_failed") -> ...
-  Error(reason) -> ...
-}
-```
-
-The Gleam wrapper does not box errors in a typed enum -- the underlying NIF atom is converted to a string and surfaced as-is. There is no `Error.InvalidParameters` type; if you want one, build it on top.
+The Gleam wrapper declares `Result(_, String)`, but most of its externals bind straight to the NIF and the value at runtime is the Erlang atom, not a `String` -- `Error("bad_mac")` will not match and `string.*` functions on the error will crash. Until 0.3 routes every call through the FFI with `atom_to_binary`, treat the error as opaque: match `Error(_)` and log it with `string.inspect`.
 
 ## Picking a wrapper
 

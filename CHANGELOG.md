@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dead scripts removed: `scripts/{aggregate_coverage,monitor,test-build,test-ci-fixes,test_coverage_improvements,test_docker_build}.sh` and `config/build.config` (referenced deleted suites, nonexistent make targets, or a `priv/nif.dylib` that was never produced).
 - `make docker-test`/`docker-perf` pass `-f docker/docker-compose.yml`; the compose file anchors build contexts and bind mounts at the repo root. CI's `elixir-version` matches `.tool-versions` (1.16.3).
 
+### Documentation
+
+- `docs/API.md` error table is regenerated from the atoms the C code actually emits, grouped by origin. The previously documented `mac_verification_failed`, `max_skip_exceeded`, `invalid_bundle`, `bundle_too_short` and `libsodium_init_failed` never existed; the real atoms are `bad_mac`, `too_many_skipped`, `invalid_bundle_size`, etc. AES-GCM is documented as AES-256 / 16-byte tag only (what `signal_nif` enforces), `generate_pre_key`/`generate_signed_pre_key` are documented as discarding their private keys, and the simple-session API's lack of direction binding, replay protection and counter nonce is stated.
+- `docs/SECURITY.md` and `docs/ARCHITECTURE.md` now describe the receive path as it is: the DR-HE header is trial-decrypted (bare AES-CBC, no header MAC) *before* the outer MAC is checked; the MAC-before-decrypt guarantee applies to the message body. Newly listed deviations from the Signal spec: Bob's initial ratchet key is his identity key rather than the signed pre-key, and header keys are seeded identically in both directions. The session blob is described as a raw, unauthenticated, ABI-specific struct copy rather than a "sealed binary"; PKSM replay and the need to delete one-time pre-keys are called out.
+- `docs/CROSS_LANGUAGE_COMPARISON.md` states that the Gleam wrapper currently surfaces raw Erlang atoms despite its `Result(_, String)` type, and that `pre_key_bundle.create` produces a layout the NIF rejects.
+- Stale references removed: `.dylib` outputs, `erl_src/`, `session.ex`, `performance_test:run_benchmarks/0`, Erlang-level `init_double_ratchet` aliases, and the `.claude/TODO.md` pointer. `shell.nix` includes `openssl` (required by CMake) plus `elixir`/`gleam`. C comments describing the pre-DR-HE `DrMessage.payload` field and a 64-byte shared secret are corrected; the dead `payload` fields are removed from `dr_message_t`.
+
 ## [0.2.0] - 2026-06-03
 
 The Signal Protocol primitives are rewritten against the on-the-wire spec: X3DH, the Double Ratchet, header encryption (DR-HE), and PreKeySignalMessage are all implemented and tested across 10 CT suites. The 0.1 line shipped an HMAC-based bundle signature forgeable from any published bundle; that's fixed with real Ed25519 identities. Numerous breaking changes -- DR session blobs, bundle binaries, and DR wire messages from any 0.1.x release will not interoperate.
@@ -39,7 +46,7 @@ The Signal Protocol primitives are rewritten against the on-the-wire spec: X3DH,
 
 ### Added
 
-- **Double Ratchet** -- `dr_init/5`, `dr_encrypt/2`, `dr_decrypt/2` NIF entry points with Erlang aliases `init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`. MKSKIPPED cache for out-of-order delivery: 32-slot bounded LRU keyed by `(header_key, message_number)`; `MAX_SKIP = 32` per receive to bound DOS.
+- **Double Ratchet** -- `dr_init/5`, `dr_encrypt/2`, `dr_decrypt/2` NIF entry points (the Elixir and Gleam wrappers expose them as `init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`; the Erlang module has no aliases). MKSKIPPED cache for out-of-order delivery: 32-slot bounded LRU keyed by `(header_key, message_number)`; `MAX_SKIP = 32` per receive to bound DOS.
 - **Double Ratchet with header encryption (DR-HE)** -- inner header protobuf is AES-256-CBC'd under a separate header key so an on-path observer can't see `(ratchet_key, counter, previous_counter)`. Receive path trial-decrypts the encrypted header against the current header key, the next header key, and each MKSKIPPED entry's stored header key.
 - **PreKeySignalMessage envelope** -- Alice's first message wraps the inner DR message in a Signal-spec PKSM protobuf so the receiver can identify which stored pre-keys to consume:
   - Wire shape: `version_byte(0x33) || protobuf{ registration_id=1, base_key=2, identity_key=3, pre_key_id=4 (optional), signed_pre_key_id=5, message=6 }`.
@@ -73,7 +80,7 @@ The Signal Protocol primitives are rewritten against the on-the-wire spec: X3DH,
 
 - `init_double_ratchet/3` → `/5`. Two arity bumps: `/3 → /4` added the explicit `IsAlice` flag and split `RemoteIdentityPub` / `SelfIdentityPriv` so a bidirectional channel actually works. `/4 → /5` added `LocalIdentityPub` so both identity pubs are folded into the Signal-spec MAC scope. New signature: `init_double_ratchet(SharedSecret, LocalIdentityPub, RemoteIdentityPub, SelfIdentityPriv, IsAlice)`.
 - `process_pre_key_bundle/2` and `process_pre_key_bundle_bob/5` return a 96-byte shared secret (was 64 bytes). The first 64 bytes are the original X3DH SK (bit-identical, extended via HKDF-Expand by one more output block); the trailing 32 bytes are a shared header-key seed for DR-HE. `init_double_ratchet/5`'s `SharedSecret` argument requires exactly 96 bytes; the old 64-byte SK is rejected with `invalid_shared_secret_size`.
-- DR NIF binding renames: `get_cache_stats` → `dr_init`, `reset_cache_stats` → `dr_encrypt`, `set_cache_size` → `dr_decrypt`. The Erlang aliases (`init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`) are unchanged, so public callers are unaffected.
+- DR NIF binding renames: `get_cache_stats` → `dr_init`, `reset_cache_stats` → `dr_encrypt`, `set_cache_size` → `dr_decrypt`. The wrapper-level names (`init_double_ratchet`, `dr_encrypt_message`, `dr_decrypt_message`) are unchanged, so Elixir and Gleam callers are unaffected.
 
 ### Changed -- Ed25519 identity (breaking)
 

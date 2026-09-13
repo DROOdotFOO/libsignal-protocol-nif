@@ -13,16 +13,19 @@
 #define DR_SIGNAL_VERSION 3
 #define DR_VERSION_BYTE ((DR_SIGNAL_VERSION << 4) | DR_SIGNAL_VERSION)  // 0x33
 
-// Double Ratchet init (per Signal DR spec section 3.3).
-// Args: SharedSecret(64), LocalIdentityPub(32), RemoteIdentityPub(32),
-//       SelfIdentityPriv(32 or 64), IsAlice(int).
+// Double Ratchet init (per Signal DR spec section 3.3, with the deviations
+// noted in docs/SECURITY.md).
+// Args: SharedSecret(96 = X3DH SK(64) || header-key seed(32)),
+//       LocalIdentityPub(32), RemoteIdentityPub(32),
+//       SelfIdentityPriv(64 for Bob, <<>> for Alice), IsAlice(int).
 // LocalIdentityPub and RemoteIdentityPub are Ed25519 pubs; they are converted
 // to X25519 and stored in state for use as the Signal-spec MAC binding (every
 // message MAC is HMAC(macKey, local_id || remote_id || version || proto)).
-// Alice: SelfIdentityPriv may be empty (she uses a fresh ephemeral for DH).
-//   She does an initial send ratchet against the remote pub.
-// Bob:   SelfIdentityPriv must be his Ed25519 64B secret. He stores it as
-//   his initial DH ratchet pair; send_chain_key is derived on first receive.
+// Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral for DH).
+//   She does an initial send ratchet against Bob's converted identity pub.
+// Bob:   SelfIdentityPriv must be his Ed25519 64B secret. Its X25519 form is
+//   his initial DH ratchet pair (spec uses SPK_B); send_chain_key is derived
+//   on first receive.
 ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 5) {

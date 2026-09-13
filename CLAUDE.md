@@ -33,7 +33,7 @@ make test             # rebar3 ct (default profile -- pinned to signal_crypto_SU
 make test-unit        # rebar3 as unit ct -- the full DR/X3DH/crypto suite
 make test-cover       # rebar3 ct --cover
 make test-unit-cover  # rebar3 as unit ct --cover
-make perf-test        # erl -eval 'performance_test:run_benchmarks()'
+make perf-test        # erl -eval 'performance_test:run()' vs test/erl/integration/performance/baseline.term
 make test-clean       # rm -rf tmp/ and log artifacts
 ```
 
@@ -53,7 +53,7 @@ cd wrappers/elixir && mix test           # ExUnit, requires NIF already built in
 cd wrappers/gleam  && gleam test         # gleeunit 1.6.0 (Gleam 1.7+ — gleeunit dep history is fragile, see CHANGELOG)
 ```
 
-Wrapper builds expect `priv/*.{so,dylib}` to exist — `mix.exs` does **not** build the NIF (`# NIF is expected to be built separately by CI`). Always `make build` first.
+Wrapper builds expect `priv/*.so` to exist — `mix.exs` does **not** build the NIF (`# NIF is expected to be built separately by CI`). Always `make build` first.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ C source under `c_src/` is flat, split by concern across files:
 
 The Erlang `libsignal_protocol_nif` module exposes session lifecycle (`create_session`, `process_pre_key_bundle`, `process_pre_key_bundle_bob`, `encrypt_message`, `decrypt_message`) and Double Ratchet (`dr_init`, `dr_encrypt`, `dr_encrypt_prekey`, `dr_decrypt`); `signal_nif` exposes the lower-level crypto primitives.
 
-Wrapper structure: `wrappers/elixir/lib/{libsignal_protocol,signal_protocol,session,pre_key_bundle}.ex` call into `:libsignal_protocol_nif` and translate atoms/binaries to idiomatic Elixir return shapes (`{:ok, ...} | {:error, String.t()}`). `wrappers/gleam/src/*.gleam` wraps the same NIF with `Result` types. Both wrappers depend on the parent project producing `priv/libsignal_protocol_nif.{so,dylib}` — they do not build C themselves.
+Wrapper structure: `wrappers/elixir/lib/{libsignal_protocol,signal_protocol,pre_key_bundle}.ex` call into `:libsignal_protocol_nif` and pass its `{:ok, ...} | {:error, atom}` shapes through. `wrappers/gleam/src/*.gleam` wraps the same NIF with `Result` types (declared `Result(_, String)`, but most externals currently surface the raw atom — see `docs/CROSS_LANGUAGE_COMPARISON.md`). Both wrappers depend on the parent project producing `priv/libsignal_protocol_nif.so` — they do not build C themselves.
 
 ## Conventions
 

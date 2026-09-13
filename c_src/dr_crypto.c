@@ -9,7 +9,7 @@
 
 // HKDF-SHA-256 (RFC 5869). Caller provides salt (use zero-filled 32 bytes if
 // none), input keying material (IKM), info, and the desired output length.
-// We produce up to N=ceil(L/32) HMAC outputs; with L<=64 this is at most 2.
+// Produces N=ceil(L/32) HMAC blocks; callers request up to L=96 (three).
 int hkdf_sha256(unsigned char *output, size_t output_len,
                 const unsigned char *salt, size_t salt_len,
                 const unsigned char *ikm, size_t ikm_len,

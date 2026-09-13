@@ -39,7 +39,7 @@ Without Nix you need libsodium and CMake on the path:
 
 Toolchain: Erlang/OTP 26, Elixir 1.16, rebar 3.22. Exact versions pinned in `.tool-versions`.
 
-`make build` writes two shared libraries to `priv/`: `signal_nif.{so,dylib}` (lower-level crypto) and `libsignal_protocol_nif.{so,dylib}` (sessions, X3DH, Double Ratchet).
+`make build` writes two shared libraries to `priv/`: `signal_nif.so` (lower-level crypto) and `libsignal_protocol_nif.so` (sessions, X3DH, Double Ratchet). BEAM loads `.so` on macOS as well; no `.dylib` is produced.
 
 ## Install
 

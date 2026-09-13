@@ -4,19 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Inner DrMessage wire form (fields 1-3 are the header; field 4 carries the
-// AEAD-encrypted body). See dr_proto.c for the full schema.
+// Parsed inner DR header: DrMessage { ratchet_key=1, counter=2,
+// previous_counter=3 }. Filled by dr_try_decrypt_header after the header is
+// decrypted; ratchet_key points into the caller's plaintext buffer.
 typedef struct {
     const unsigned char *ratchet_key;
     size_t ratchet_key_len;
     uint32_t counter;
     uint32_t previous_counter;
-    const unsigned char *payload;
-    size_t payload_len;
     int seen_ratchet_key;
     int seen_counter;
     int seen_previous_counter;
-    int seen_payload;
 } dr_message_t;
 
 // Protobuf varint codec, shared with pksm.c.
