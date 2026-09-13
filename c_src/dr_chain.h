@@ -24,9 +24,13 @@ void mkskipped_pop(double_ratchet_state_t *state, int index,
                    unsigned char *out_message_key);
 
 // Skip and store keys in the current recv chain up to `until` (exclusive).
-// Returns 0 on success, -1 if the skip exceeds MAX_SKIP.
+// Each skipped key consumes one unit of *budget (caller seeds it with
+// MAX_SKIP once per receive so the budget spans both sides of a DH ratchet).
+// Returns 0 on success, -1 if the skip would exceed the remaining budget;
+// on -1 nothing is derived or stored.
 int skip_message_keys(double_ratchet_state_t *state,
-                      unsigned int until);
+                      unsigned int until,
+                      unsigned int *budget);
 
 // Double Ratchet receive-side ratchet step (Signal DR spec section 3.5).
 // Performs two KDF passes: first deriving new recv_chain_key, then generating

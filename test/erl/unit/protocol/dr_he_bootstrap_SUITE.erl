@@ -18,14 +18,14 @@
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([rejects_64_byte_shared_secret/1, rejects_95_byte_shared_secret/1,
          rejects_zero_byte_shared_secret/1, accepts_96_byte_shared_secret/1,
-         dr_state_grows_for_header_keys/1]).
+         dr_state_size_pinned/1]).
 
 all() ->
     [rejects_64_byte_shared_secret,
      rejects_95_byte_shared_secret,
      rejects_zero_byte_shared_secret,
      accepts_96_byte_shared_secret,
-     dr_state_grows_for_header_keys].
+     dr_state_size_pinned].
 
 init_per_suite(Config) ->
     dr_test_helpers:nif_or_skip(Config, {17, 19, 23}).
@@ -61,15 +61,17 @@ accepts_96_byte_shared_secret(_Config) ->
     ?assertMatch({ok, _}, libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0)).
 
 %% Pin the DR state binary size on this build target so unintended struct
-%% growth (extra fields, padding) is caught at test time. 2836 bytes equals
-%% the prior 2708-byte struct plus 4 * 32 = 128 bytes of header-key fields.
+%% growth (extra fields, padding) is caught at test time. 5268 bytes equals
+%% the 0.2.0 struct (2836: 2708 + 4 * 32 header-key fields) plus 32 more
+%% MKSKIPPED slots of 76 bytes each (MAX_SKIPPED_KEYS went 32 -> 64 so one
+%% receive can never evict the previous receive's cached keys).
 %% Padding/alignment is platform-dependent; if this fails on a new target,
-%% confirm the delta matches the 128B header-key addition before updating.
-dr_state_grows_for_header_keys(_Config) ->
+%% confirm the delta matches a known struct change before updating.
+dr_state_size_pinned(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(96),
     {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
-    ?assertEqual(2836, byte_size(Alice)).
+    ?assertEqual(5268, byte_size(Alice)).
 
 %% ============================================================================
 %% Helpers

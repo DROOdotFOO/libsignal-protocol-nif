@@ -78,18 +78,22 @@ void mkskipped_pop(double_ratchet_state_t *state, int index,
 
 // Skip and store keys in the current recv chain up to `until` (exclusive).
 // state->recv_chain_key advances as keys are derived; state->recv_message_number
-// is bumped to `until`. Returns 0 on success, -1 if the skip exceeds MAX_SKIP.
+// is bumped to `until`. Each derived key consumes one unit of *budget; returns
+// -1 without touching state if the skip needs more than what remains.
 // No-op when the recv chain hasn't been established yet (Alice pre-receive).
 // Cached entries are keyed on state->header_key_recv at call time (the chain's
 // current receiving header key, used to trial-decrypt later late-deliveries).
 int skip_message_keys(double_ratchet_state_t *state,
-                      unsigned int until) {
+                      unsigned int until,
+                      unsigned int *budget) {
     if (until <= state->recv_message_number) {
         return 0;
     }
-    if (until - state->recv_message_number > MAX_SKIP) {
+    unsigned int needed = until - state->recv_message_number;
+    if (needed > *budget) {
         return -1;
     }
+    *budget -= needed;
     if (!state->dh_recv_initialized) {
         // No recv chain to derive from; treat as no-op. The DH ratchet that
         // follows will establish the chain at message number 0.

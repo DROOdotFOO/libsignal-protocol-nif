@@ -41,31 +41,31 @@ The wrappers serialize a higher-level versioned bundle for storage. The NIF only
 
 Standard Signal X3DH with one variation: the KDF uses `info="X3DH-Signal"` rather than Signal's `"WhisperText"`. Structure of the HKDF call is identical, only the info bytes differ.
 
-The output widened in 0.2 from 64 to 96 bytes. The first 64 are the X3DH SK (bit-identical to the old output -- the new bytes come from extending HKDF-Expand by one block). The trailing 32 are a shared header-key seed for DR-HE.
+The output widened in 0.2 from 64 to 96 bytes and is laid out as `root(32) || seed_a(32) || seed_b(32)`. The first 32 bytes seed the DR root key; the two trailing seeds become the initial next-header-keys, assigned mirror-wise by role so Alice's sending header key equals Bob's receiving one and vice versa (Signal's `shared_hka` / `shared_nhkb`).
 
 Bob's side reconstructs the same 96 bytes from his stored privs plus values from Alice's first message. `x3dh_dr_compose_SUITE` asserts the two halves match by computing Bob's X3DH in plain Erlang via `crypto:compute_key(ecdh, _, _, x25519)`.
 
 ### Double Ratchet with header encryption
 
-The DR session struct (`double_ratchet_state_t` in `dr.h`) carries the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 32-slot MKSKIPPED LRU cache. Serialized blob is roughly 2.6 KB.
+The DR session struct (`double_ratchet_state_t` in `dr.h`) carries the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 64-slot MKSKIPPED LRU cache. Serialized blob is roughly 5.3 KB.
 
 Wire envelope:
 
 ```
 version_byte(0x33)
-  || protobuf { enc_header=1: bytes(iv16 || AES-256-CBC(header_key, header_pb)),
+  || protobuf { enc_header=1: bytes(iv(16) || AES-256-CBC(hk_cipher, header_pb) || tag(16)),
                 ciphertext=2: bytes(AES-256-CBC(message_key, plaintext)) }
   || mac(8)
 ```
 
-- `header_key` comes from the DR state (`header_key_send` / `header_key_recv`, rotated from the pre-derived `next_*` at each DH step). Both directions are currently seeded from the same 32 bytes of the X3DH output -- see `SECURITY.md`, "Known deviations".
-- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }` (38..46 bytes, always padded to 48). Encrypting it hides those fields from on-path observers. The header IV is 16 random bytes shipped in the clear; the header itself carries no MAC.
+- `header_key` comes from the DR state (`header_key_send` / `header_key_recv`, rotated from the pre-derived `next_*` at each DH step). `HKDF(header_key, info="WhisperHeader", L=64)` yields `hk_cipher(32) || hk_mac(32)`.
+- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }` (38..46 bytes, always padded to 48). Encrypting it hides those fields from on-path observers. The header IV is 16 random bytes shipped in the clear; `tag = HMAC-SHA-256(hk_mac, iv || ct)[0..16)`.
 - `message_key -> HKDF(info="WhisperMessageKeys", L=80) -> cipher_key(32) || mac_key(32) || iv(16)`. The body IV is HKDF-derived, not random.
-- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified with `sodium_memcmp` before the *body* is AES-CBC decrypted, closing the padding-oracle channel on the body.
+- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified with `sodium_memcmp` before the body is AES-CBC decrypted.
 
-Receive first pins `enc_header` to exactly 64 bytes and the body to a non-zero multiple of 16, then trial-decrypts `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key. PKCS#7 unpad + strict inner protobuf parse is the success oracle, and it runs *before* the outer MAC (the header has no MAC of its own). MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is no longer available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
+Receive first pins `enc_header` to exactly 80 bytes and the body to a non-zero multiple of 16, then trial-opens `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key: the header tag is verified in constant time and only a header that authenticates is CBC-decrypted and parsed. MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is not available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
 
-`MAX_SKIP = 32` per receive bounds DOS. Anything beyond returns `too_many_skipped`.
+One `MAX_SKIP = 32` budget per receive bounds DOS and spans both sides of a DH ratchet (previous-chain tail plus new-chain prefix). Anything beyond returns `too_many_skipped`. MKSKIPPED holds 64 entries so a full-budget receive cannot evict the previous receive's keys.
 
 ### PreKeySignalMessage envelope
 

@@ -11,11 +11,13 @@
 #define DR_MESSAGE_KEY_SIZE 32
 #define DR_HEADER_KEY_SIZE 32
 
-// MKSKIPPED bounds. MAX_SKIP gates DOS (an attacker sending message_number=N
-// would force N KDF rounds before erroring); MAX_SKIPPED_KEYS bounds memory.
-// Aligned so we don't derive keys we'd immediately discard.
-#define MAX_SKIPPED_KEYS 32
+// MKSKIPPED bounds. MAX_SKIP gates DOS: it is a per-receive budget shared
+// across both sides of a DH ratchet (PN tail + N prefix), so one message can
+// insert at most MAX_SKIP keys. MAX_SKIPPED_KEYS is twice that so a single
+// receive can never evict keys cached by the previous receive; eviction is
+// LRU beyond that.
 #define MAX_SKIP 32
+#define MAX_SKIPPED_KEYS (2 * MAX_SKIP)
 
 // Skipped message-key cache entry. Indexed by (header_key, message_number).
 // With DR-HE the receiver cannot see dh_pub or message_number until the
@@ -54,13 +56,13 @@ typedef struct {
     unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
     unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
 
-    // DR-HE (header encryption) keys. HKs/HKr encrypt the current chain's
-    // headers (AES-256-CBC under HKDF(hk, "WhisperHeader"); no header MAC);
-    // NHKs/NHKr are pre-derived for the *next* DH ratchet step and rotate
-    // into HKs/HKr at that step. Both NHKs and NHKr are seeded from the same
-    // 32 bytes of the X3DH output at dr_init (see docs/SECURITY.md, "Known
-    // deviations"). Zero until the first rotation; hk_is_nonzero() filters
-    // the never-seeded HKr on Alice's side.
+    // DR-HE (header encryption) keys. HKs/HKr protect the current chain's
+    // headers (AES-256-CBC + HMAC tag, both keys from HKDF(hk,
+    // "WhisperHeader")); NHKs/NHKr are pre-derived for the *next* DH ratchet
+    // step and rotate into HKs/HKr at that step. Seeded at dr_init from the
+    // two trailing 32-byte halves of the X3DH output, assigned mirror-wise by
+    // role so each direction has its own key. Zero until the first rotation;
+    // hk_is_nonzero() filters the never-seeded HKr on Alice's side.
     unsigned char header_key_send[DR_HEADER_KEY_SIZE];
     unsigned char header_key_recv[DR_HEADER_KEY_SIZE];
     unsigned char next_header_key_send[DR_HEADER_KEY_SIZE];

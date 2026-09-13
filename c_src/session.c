@@ -7,8 +7,9 @@
 // Finish the X3DH key derivation: SK = HKDF(salt=zeros, IKM=F||KM,
 // info="X3DH-Signal", L=96). F is 32 bytes of 0xFF (Signal X25519 spec).
 // km is DH1||DH2||DH3 (96B) or DH1||DH2||DH3||DH4 (128B).
-// Slot map: [0..64) = SK (root seed for dr_init), [64..96) = shared header
-// key seed for DR-HE. Returns 0 on success.
+// Slot map: [0..32) = DR root key, [32..64) = header-key seed A,
+// [64..96) = header-key seed B (see dr_init for the per-role assignment).
+// Returns 0 on success.
 static int x3dh_derive_sk(const unsigned char *km, size_t km_size,
                           unsigned char sk_out[96])
 {
@@ -218,8 +219,8 @@ cleanup:
 //   DH3 = DH(SPK_B_priv, EK_A_pub)     == DH(EK_A_priv, SPK_B_pub)
 //   DH4 = DH(OPK_B_priv, EK_A_pub)     == DH(EK_A_priv, OPK_B_pub)
 // KM = DH1||DH2||DH3[||DH4]; SK = X3DH KDF(KM). Returns {ok, SK(96B)},
-// where SK[0..64) is the X3DH root seed and SK[64..96) is the DR-HE shared
-// header key.
+// where SK[0..32) is the DR root key and SK[32..96) are the two per-direction
+// DR-HE header-key seeds.
 ERL_NIF_TERM process_pre_key_bundle_bob(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 5) {

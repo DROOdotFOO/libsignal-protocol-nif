@@ -63,15 +63,21 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     memcpy(state.root_key, shared_secret.data, 32);
 
-    // DR-HE bootstrap: shared_secret[64..96) seeds the next-header-key for
-    // both directions. After the first DH ratchet step on each side, the
-    // active header_key for that direction is rotated in from this seed,
-    // so Alice's HKs at time t == Bob's HKr at time t. header_key_send /
-    // header_key_recv stay zero until that first rotation.
-    // shared_secret[32..64) belongs to the 64B X3DH SK and is reserved
-    // for future Signal-spec wire elements; not consumed by DR.
-    memcpy(state.next_header_key_send, shared_secret.data + 64, 32);
-    memcpy(state.next_header_key_recv, shared_secret.data + 64, 32);
+    // DR-HE bootstrap (Signal DR-HE spec: shared_hka / shared_nhkb). The
+    // 96-byte X3DH output is root(32) || seed_a(32) || seed_b(32). Alice's
+    // sending header key must equal Bob's receiving one and vice versa, so
+    // the two seeds are assigned mirror-wise by role:
+    //   Alice: NHKs = seed_b, NHKr = seed_a
+    //   Bob:   NHKs = seed_a, NHKr = seed_b
+    // After the first DH ratchet step on each side the active header_key
+    // for that direction is rotated in from NHK*; header_key_send /
+    // header_key_recv stay zero until that first rotation. Using distinct
+    // seeds per direction means a message reflected back to its sender
+    // does not authenticate under any of the sender's receive header keys.
+    const unsigned char *seed_a = shared_secret.data + 32;
+    const unsigned char *seed_b = shared_secret.data + 64;
+    memcpy(state.next_header_key_send, is_alice ? seed_b : seed_a, 32);
+    memcpy(state.next_header_key_recv, is_alice ? seed_a : seed_b, 32);
 
     // Convert + store both identity pubs as X25519 form (used as MAC binding).
     if (crypto_sign_ed25519_pk_to_curve25519(state.local_identity_pub,
@@ -153,15 +159,14 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     unsigned char next_chain[DR_CHAIN_KEY_SIZE];
     unsigned char cipher_key[32], mac_key[32], iv[16];
-    unsigned char hcipher[32];
     unsigned char inner_header[64];
+    unsigned char enc_header[DR_ENC_HEADER_LEN];
     unsigned char mac[DR_MAC_LEN];
     unsigned char *cbc_buf = NULL;
-    unsigned char *enc_header = NULL;
     unsigned char *envelope = NULL;
     unsigned char *wire = NULL;
-    size_t cbc_len = 0, header_ct_len = 0;
-    size_t inner_header_len = 0, enc_header_len = 0, envelope_len = 0;
+    size_t cbc_len = 0;
+    size_t inner_header_len = 0, envelope_len = 0;
     size_t wire_len = 0;
 
     if (!state->initialized) { err = "session_not_initialized"; goto cleanup; }
@@ -186,38 +191,22 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
     }
 
     // Inner header plaintext: protobuf fields 1-3 only (ratchet_key, counter,
-    // previous_counter). Max 46 bytes.
+    // previous_counter); 38..46 bytes. Sealed under the current send header
+    // key as iv(16) || AES-CBC(48) || tag(16) = DR_ENC_HEADER_LEN; the tag
+    // lets the receiver reject forged headers before any decryption.
     inner_header_len = dr_serialize_header(inner_header, state->dh_send_public, 32,
                                            state->send_message_number,
                                            state->prev_send_length);
-
-    // Encrypt the inner header under the current send header_key with a
-    // fresh random 16B IV. The wire form of enc_header is `iv || ciphertext`
-    // so the receiver can run AES-CBC-decrypt with each candidate header_key
-    // against the same IV during trial-decrypt. Reusing a static IV across
-    // messages in a chain would expose identical leading blocks (the inner
-    // header's first 16B are an invariant ratchet_key prefix).
-    if (dr_derive_header_cipher_key(hcipher, state->header_key_send) != 0) {
-        err = "kdf_failed"; goto cleanup;
-    }
-    enc_header = enif_alloc(16 + inner_header_len + 16);
-    if (!enc_header) { err = "memory_allocation_failed"; goto cleanup; }
-    randombytes_buf(enc_header, 16);  // random IV at the head
-    if (dr_aes_cbc_encrypt(enc_header + 16, &header_ct_len,
-                           inner_header, inner_header_len,
-                           hcipher, enc_header) != 0) {
+    if (dr_seal_header(enc_header, state->header_key_send,
+                       inner_header, inner_header_len) != 0) {
         err = "encryption_failed"; goto cleanup;
     }
-    enc_header_len = 16 + header_ct_len;
-    // Mirror of the receiver's pin: a legitimate header is always exactly
-    // DR_ENC_HEADER_LEN. Refuse to emit anything the peer would reject.
-    if (enc_header_len != DR_ENC_HEADER_LEN) { err = "encryption_failed"; goto cleanup; }
 
     // Outer envelope protobuf: {enc_header = 1, ciphertext = 2}.
     // Max overhead: 2 tags + 2 varints = 22 bytes.
-    envelope = enif_alloc(22 + enc_header_len + cbc_len);
+    envelope = enif_alloc(22 + DR_ENC_HEADER_LEN + cbc_len);
     if (!envelope) { err = "memory_allocation_failed"; goto cleanup; }
-    envelope_len = dr_serialize_envelope(envelope, enc_header, enc_header_len,
+    envelope_len = dr_serialize_envelope(envelope, enc_header, DR_ENC_HEADER_LEN,
                                          cbc_buf, cbc_len);
 
     // MAC over local_id_pub || remote_id_pub || version || envelope.
@@ -248,10 +237,9 @@ cleanup:
     sodium_memzero(cipher_key, sizeof(cipher_key));
     sodium_memzero(mac_key, sizeof(mac_key));
     sodium_memzero(iv, sizeof(iv));
-    sodium_memzero(hcipher, sizeof(hcipher));
     sodium_memzero(inner_header, sizeof(inner_header));
+    sodium_memzero(enc_header, sizeof(enc_header));
     if (cbc_buf) enif_free(cbc_buf);
-    if (enc_header) enif_free(enc_header);
     if (envelope) enif_free(envelope);
     if (wire) enif_free(wire);
     return err;
@@ -536,7 +524,12 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if (!found) { err = "bad_mac"; goto cleanup; }
 
-    // Apply path-specific state advance and derive the message key.
+    // Apply path-specific state advance and derive the message key. One
+    // MAX_SKIP budget covers the whole receive: for a ratchet message that
+    // is the tail of the previous chain (PN) plus the skipped prefix of the
+    // new one (N) together, so a single message can never insert more than
+    // MAX_SKIP keys into MKSKIPPED.
+    unsigned int skip_budget = MAX_SKIP;
     if (path == PATH_SKIPPED) {
         mkskipped_pop(&state, matched_skipped_idx, message_key);
     } else if (path == PATH_CURRENT) {
@@ -550,7 +543,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             if (idx < 0) { err = "bad_mac"; goto cleanup; }
             mkskipped_pop(&state, idx, message_key);
         } else {
-            if (skip_message_keys(&state, inner.counter) != 0) {
+            if (skip_message_keys(&state, inner.counter, &skip_budget) != 0) {
                 err = "too_many_skipped"; goto cleanup;
             }
             derive_message_key(message_key, state.recv_chain_key);
@@ -558,13 +551,13 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             state.recv_message_number++;
         }
     } else { // PATH_RATCHET
-        if (skip_message_keys(&state, inner.previous_counter) != 0) {
+        if (skip_message_keys(&state, inner.previous_counter, &skip_budget) != 0) {
             err = "too_many_skipped"; goto cleanup;
         }
         if (dh_ratchet_recv(&state, inner.ratchet_key) != 0) {
             err = "dh_ratchet_failed"; goto cleanup;
         }
-        if (skip_message_keys(&state, inner.counter) != 0) {
+        if (skip_message_keys(&state, inner.counter, &skip_budget) != 0) {
             err = "too_many_skipped"; goto cleanup;
         }
         derive_message_key(message_key, state.recv_chain_key);

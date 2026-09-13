@@ -4,7 +4,7 @@ Two Erlang NIF modules ship in this repo. `signal_nif` is lower-level crypto pri
 
 All NIF calls return `{ok, Term} | {error, Atom}` unless noted. Sensitive scratch buffers are wiped with `sodium_memzero`. A failed `load_nif/0` fails closed -- the module refuses to load, the calling process gets `UndefinedFunctionError`.
 
-Sizes match the 0.2.0 wire format: Ed25519 identities (32-byte pub, 64-byte priv), X25519 for DH (32B), 96-byte X3DH shared secret (64B SK || 32B header-key seed for DR-HE).
+Sizes match the 0.3.0 wire format: Ed25519 identities (32-byte pub, 64-byte priv), X25519 for DH (32B), 96-byte X3DH shared secret (32B root key || 32B header-key seed A || 32B header-key seed B).
 
 ## signal_nif
 
@@ -123,7 +123,7 @@ id_pub(32) || spk_pub(32) || signature(64) [|| opk_pub(32)]
     libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv64, Bundle).
 ```
 
-The 96-byte shared secret is `X3DH_SK(64) || DR_HE_seed(32)`. Feed it straight into `dr_init/5`.
+The 96-byte shared secret is `root(32) || seed_a(32) || seed_b(32)`: the first 32 bytes seed the DR root key and the two trailing seeds become the initial next-header-keys, assigned mirror-wise by role (Alice sends under `seed_b`, receives under `seed_a`; Bob the reverse). Feed it straight into `dr_init/5`.
 
 Bob's side reconstructs the same shared secret from the values he stored plus the ephemeral pub from Alice's first message:
 
@@ -169,12 +169,12 @@ Wire envelope (DR with header encryption):
 
 ```
 version_byte(0x33)
-  || protobuf{ enc_header=1: bytes(iv16||AES-256-CBC(header_key, header_pb)),
+  || protobuf{ enc_header=1: bytes(iv(16) || AES-256-CBC(hk_cipher, header_pb) || tag(16)),
                ciphertext=2:  bytes(AES-256-CBC(message_key, plaintext)) }
   || mac(8)   %% HMAC-SHA-256 over sender_id||receiver_id||version||outer protobuf
 ```
 
-The receiver trial-decrypts `enc_header` against the current header key, the next header key, and MKSKIPPED entries. MKSKIPPED is a 32-slot LRU; per-receive `MAX_SKIP=32`. `enc_header` is always exactly 64 bytes (`iv(16) || 48` bytes of AES-CBC); any other length is rejected as `malformed_message` before any key is used.
+`enc_header` is always exactly 80 bytes: a random IV, one 48-byte CBC block-triple (the inner header is 38..46 bytes), and a 16-byte truncated HMAC-SHA-256 over `iv || ct` under a MAC key derived alongside the cipher key from the header key. The receiver trial-opens it against the current receive header key, the next one, and each MKSKIPPED entry: the tag is checked first (constant time), so a header that does not authenticate under a key is never decrypted or parsed. Any other length is rejected as `malformed_message` before any key is used. MKSKIPPED is a 64-slot LRU; one `MAX_SKIP=32` budget covers a whole receive, including both sides of a DH ratchet (previous-chain tail plus new-chain prefix), so a single message can never insert more than 32 keys and never evicts the previous receive's keys.
 
 Errors: `invalid_session_size`, `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key decrypts the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
 
@@ -240,10 +240,10 @@ Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom a
 | AES-GCM key             | 32 bytes (AES-256 only)                  |
 | AES-GCM IV              | 12 bytes                                 |
 | AES-GCM tag             | 16 bytes                                 |
-| X3DH shared secret      | 96 bytes (64B SK \|\| 32B DR-HE seed)    |
-| DR session blob         | `sizeof(double_ratchet_state_t)`, ~2.6 KB; layout is compiler/ABI-specific, see `SECURITY.md` |
+| X3DH shared secret      | 96 bytes (root 32 \|\| seed_a 32 \|\| seed_b 32) |
+| DR session blob         | `sizeof(double_ratchet_state_t)`, ~5.3 KB; layout is compiler/ABI-specific, see `SECURITY.md` |
 | DR MAC                  | 8 bytes (truncated HMAC-SHA-256)         |
-| DR `enc_header`         | 64 bytes (iv 16 \|\| AES-CBC 48)         |
+| DR `enc_header`         | 80 bytes (iv 16 \|\| AES-CBC 48 \|\| tag 16) |
 | PreKeyBundle wire       | 128 bytes (160 with OPK)                 |
 
 ## End-to-end flow
