@@ -29,40 +29,24 @@ check-project-root:
 		exit 1; \
 	fi
 
+# rebar3 symlinks _build/<profile>/lib/libsignal_protocol_nif/priv to priv/,
+# and the .erl stubs resolve the NIF via code:priv_dir/1, so producing the
+# two .so files in priv/ is the whole job. Missing output is a hard error.
 build: check-project-root $(BUILD_DIR)
 	@echo "Building Signal Protocol NIF..."
-	# Check for required dependencies
 	@which cmake > /dev/null || (echo "ERROR: cmake not found. Please install cmake." && exit 1)
 	@pkg-config --exists libsodium || (echo "ERROR: libsodium not found. Please install libsodium-dev." && exit 1)
-	# Build C components
 	cd c_src && cmake . -DCMAKE_BUILD_TYPE=Release && make
-	# Verify NIF files were created
-	@ls -la priv/ || (echo "ERROR: NIF files not created in priv/ directory" && exit 1)
-	# Copy NIF to all relevant test and default profile priv directories
-	mkdir -p _build/default/lib/nif/priv
-	mkdir -p _build/test/lib/nif/priv
-	mkdir -p _build/unit+test/lib/nif/priv
-	mkdir -p _build/unit+test/extras/test/priv
-	# Copy .so files (Linux) and .dylib files (macOS)
-	cp priv/*.so _build/default/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/default/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.so _build/test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.so _build/unit+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/unit+test/lib/nif/priv/ 2>/dev/null || true
-	cp priv/*.so _build/unit+test/extras/test/priv/ 2>/dev/null || true
-	cp priv/*.dylib _build/unit+test/extras/test/priv/ 2>/dev/null || true
+	@test -f priv/signal_nif.so || (echo "ERROR: priv/signal_nif.so was not produced" && exit 1)
+	@test -f priv/libsignal_protocol_nif.so || (echo "ERROR: priv/libsignal_protocol_nif.so was not produced" && exit 1)
 	@echo "Build completed successfully!"
 
-# CI-specific build target
+# CI-specific build target: parallel make, same outputs and checks.
 ci-build: check-project-root $(BUILD_DIR)
 	@echo "Building for CI environment..."
 	cd c_src && cmake . -DCMAKE_BUILD_TYPE=Release && make -j$(shell nproc 2>/dev/null || echo 1)
-	# Copy NIF to only the correct test and default profile priv directories
-	mkdir -p _build/default/lib/nif/priv
-	mkdir -p _build/test/lib/nif/priv
-	cp priv/signal_nif.so _build/default/lib/nif/priv/ || true
-	cp priv/signal_nif.so _build/test/lib/nif/priv/ || true
+	@test -f priv/signal_nif.so || (echo "ERROR: priv/signal_nif.so was not produced" && exit 1)
+	@test -f priv/libsignal_protocol_nif.so || (echo "ERROR: priv/libsignal_protocol_nif.so was not produced" && exit 1)
 	@echo "CI build completed successfully!"
 
 # Clean build artifacts. CMake currently runs in-tree (see `build` target), so
@@ -181,13 +165,13 @@ docker-build:
 
 docker-test:
 	@echo "Running tests in Docker..."
-	docker-compose up --abort-on-container-exit erlang-test
-	docker-compose up --abort-on-container-exit elixir-test
-	docker-compose up --abort-on-container-exit gleam-test
+	docker compose -f docker/docker-compose.yml up --abort-on-container-exit erlang-test
+	docker compose -f docker/docker-compose.yml up --abort-on-container-exit elixir-test
+	docker compose -f docker/docker-compose.yml up --abort-on-container-exit gleam-test
 
 docker-perf:
 	@echo "Running performance tests in Docker..."
-	docker-compose up --abort-on-container-exit perf-test
+	docker compose -f docker/docker-compose.yml up --abort-on-container-exit perf-test
 
 # Build wrapper packages
 build-wrappers: build
@@ -207,11 +191,10 @@ build-wrappers-nix:
 	nix-shell --run "cd wrappers/gleam && gleam build"
 	@echo "Wrapper packages built successfully!"
 
-# Build a clean Hex tarball for the main Erlang package.
-# Builds NIFs first so scripts/copy_nifs.sh's auto-build branch doesn't kick in
-# (that branch runs cmake in-tree in c_src/ and leaves droppings). Then strips
-# any in-tree cmake artifacts left by `make build` itself before packaging, so
-# the tarball ships only sources -- not CMakeFiles/, CMakeCache.txt, etc.
+# Build a clean Hex tarball for the main Erlang package. Builds NIFs first so
+# c_src/build_nif.sh's source-build branch doesn't kick in at rebar3 compile
+# time, then strips the in-tree cmake artifacts left by `make build` so the
+# tarball ships only sources -- not CMakeFiles/, CMakeCache.txt, etc.
 hex-package: clean build
 	@echo "Stripping in-tree cmake droppings before packaging..."
 	rm -rf c_src/CMakeFiles c_src/CMakeCache.txt c_src/cmake_install.cmake c_src/Makefile c_src/build

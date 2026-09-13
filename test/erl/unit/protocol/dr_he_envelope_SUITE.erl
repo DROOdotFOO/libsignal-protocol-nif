@@ -122,9 +122,9 @@ malformed_outer_envelope_rejected(Config) ->
 %% A legitimate enc_header is always iv(16) || 48B of AES-CBC output = 64B.
 %% The receiver trial-decrypts enc_header into a fixed-size stack buffer
 %% *before* the outer MAC is checked, so any other length must be rejected
-%% structurally. Pre-fix, an oversized header smashed the NIF stack (the
-%% 4 KB case crashed the VM); an undersized-but-block-aligned one was
-%% accepted into the trial loop.
+%% structurally -- including sizes the old `>= 32 && % 16 == 0` check let
+%% through (48, 80, ...) and sizes it rejected for the wrong reason (0, 16,
+%% 47, 63, 65). Pre-fix, the 4 KB case smashed the NIF stack.
 wrong_size_enc_header_rejected(Config) ->
     Bob = ?config(bob, Config),
     lists:foreach(fun(HeaderLen) ->
@@ -133,7 +133,7 @@ wrong_size_enc_header_rejected(Config) ->
                                   libsignal_protocol_nif:dr_decrypt(Bob, Wire),
                                   {enc_header_len, HeaderLen})
                   end,
-                  [16 + 32, 16 + 64, 16 + 96, 16 + 4096, 16 + 65536]).
+                  [0, 16, 47, 48, 63, 65, 80, 112, 16 + 4096, 16 + 65536]).
 
 %% ============================================================================
 %% Helpers

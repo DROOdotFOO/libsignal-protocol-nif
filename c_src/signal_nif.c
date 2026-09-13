@@ -1,17 +1,6 @@
 #include <erl_nif.h>
 #include <string.h>
-#include <stdlib.h>
 #include <sodium.h>
-
-static ERL_NIF_TERM test_function(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    return enif_make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM test_crypto(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    return enif_make_atom(env, "crypto_ok");
-}
 
 static ERL_NIF_TERM sha256(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -314,7 +303,7 @@ static ERL_NIF_TERM aes_gcm_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     unsigned char *tag_data = enif_make_new_binary(env, crypto_aead_aes256gcm_ABYTES, &tag_term);
     
     // Temporary buffer for ciphertext + tag
-    unsigned char *temp_buffer = malloc(ciphertext_len);
+    unsigned char *temp_buffer = enif_alloc(ciphertext_len);
     if (!temp_buffer) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"), 
                                enif_make_atom(env, "memory_allocation_failed"));
@@ -326,7 +315,7 @@ static ERL_NIF_TERM aes_gcm_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                       aad.data, aad.size,
                                       NULL, iv.data, key.data) != 0) {
         sodium_memzero(temp_buffer, ciphertext_len);
-        free(temp_buffer);
+        enif_free(temp_buffer);
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "encryption_failed"));
     }
@@ -336,7 +325,7 @@ static ERL_NIF_TERM aes_gcm_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     memcpy(tag_data, temp_buffer + plaintext.size, crypto_aead_aes256gcm_ABYTES);
 
     sodium_memzero(temp_buffer, ciphertext_len);
-    free(temp_buffer);
+    enif_free(temp_buffer);
     return enif_make_tuple3(env, enif_make_atom(env, "ok"), ciphertext_term, tag_term);
 }
 
@@ -376,7 +365,7 @@ static ERL_NIF_TERM aes_gcm_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     
     // Create combined ciphertext + tag buffer
     size_t combined_len = ciphertext.size + tag.size;
-    unsigned char *combined_buffer = malloc(combined_len);
+    unsigned char *combined_buffer = enif_alloc(combined_len);
     if (!combined_buffer) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"), 
                                enif_make_atom(env, "memory_allocation_failed"));
@@ -395,20 +384,18 @@ static ERL_NIF_TERM aes_gcm_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
                                       aad.data, aad.size,
                                       iv.data, key.data) != 0) {
         sodium_memzero(combined_buffer, combined_len);
-        free(combined_buffer);
+        enif_free(combined_buffer);
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "decryption_failed"));
     }
 
     sodium_memzero(combined_buffer, combined_len);
-    free(combined_buffer);
+    enif_free(combined_buffer);
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), plaintext_term);
 }
 
 // Define the NIF function array with the correct 4-field structure for Erlang 27
 static ErlNifFunc nif_funcs[] = {
-    {"test_function", 0, test_function, 0},
-    {"test_crypto", 0, test_crypto, 0},
     {"sha256", 1, sha256, 0},
     {"generate_curve25519_keypair", 0, generate_curve25519_keypair, 0},
     {"generate_ed25519_keypair", 0, generate_ed25519_keypair, 0},

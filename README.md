@@ -88,7 +88,7 @@ For full X3DH + Double Ratchet flows see `test/erl/unit/protocol/double_ratchet_
 
 ## Troubleshooting
 
-`{error, {load_failed, ...}}`: run `make build` first and confirm `priv/*.{so,dylib}` exists. If only the `default` profile loads, check `scripts/copy_nifs.sh` -- the rebar3 post-compile hook fans NIFs out into `_build/{test,unit+test}/lib/nif/priv/`.
+`{error, {nif_not_found, ...}}` / `{error, {load_failed, ...}}`: run `make build` first and confirm `priv/signal_nif.so` and `priv/libsignal_protocol_nif.so` exist. The on_load error term lists every path tried and why each failed.
 
 `fatal error: sodium.h: No such file`: install libsodium development headers.
 

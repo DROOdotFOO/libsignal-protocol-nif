@@ -7,13 +7,24 @@
 // Signal-spec MAC truncation: HMAC-SHA-256 output keeps only the first 8 bytes.
 #define DR_MAC_LEN 8
 
-// Wire length of the DR-HE enc_header: iv(16) || AES-256-CBC(inner header).
+// DR-HE enc_header wire layout: iv(16) || AES-256-CBC(inner header).
 // The inner header protobuf is tag(1)+len(1)+ratchet_key(32) + tag(1)+
-// varint(1..5) + tag(1)+varint(1..5) = 38..46 bytes, so PKCS#7 always pads
-// it to exactly 48. Any other length on the wire is malformed and must be
-// rejected before any decryption is attempted.
+// varint(1..5) + tag(1)+varint(1..5) = 38..46 bytes; PKCS#7 pads every
+// length in that range to one 48-byte ciphertext, so enc_header is always
+// exactly 64 bytes. The receiver rejects any other length before decrypting
+// and the sender refuses to emit one, so a header-format change that breaks
+// this arithmetic fails loudly (static assert below) rather than desyncing.
+#define DR_INNER_HEADER_MIN 38
 #define DR_INNER_HEADER_MAX 46
-#define DR_ENC_HEADER_LEN (16 + 48)
+#define DR_HEADER_IV_LEN 16
+#define DR_HEADER_CT_LEN 48
+#define DR_ENC_HEADER_LEN (DR_HEADER_IV_LEN + DR_HEADER_CT_LEN)
+_Static_assert(DR_INNER_HEADER_MIN >= DR_HEADER_CT_LEN - 16 &&
+               DR_INNER_HEADER_MAX < DR_HEADER_CT_LEN,
+               "inner header must PKCS#7-pad to exactly DR_HEADER_CT_LEN bytes");
+// Output capacity a caller must give dr_try_decrypt_header: OpenSSL documents
+// EVP_DecryptUpdate as needing inl + block_size bytes of room.
+#define DR_HEADER_PLAIN_CAP (DR_HEADER_CT_LEN + 16)
 
 // HKDF-SHA-256 (RFC 5869). Shared between DR (KDF_RK) and X3DH (root seed).
 int hkdf_sha256(unsigned char *output, size_t output_len,

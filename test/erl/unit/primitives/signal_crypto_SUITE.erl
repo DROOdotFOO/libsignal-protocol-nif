@@ -18,23 +18,13 @@ all() ->
      test_aes_gcm_encryption].
 
 init_per_suite(Config) ->
-    io:format("signal_crypto_SUITE: init_per_suite starting~n", []),
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            io:format("NIF initialized successfully~n"),
-            Config;
-        {error, Reason} ->
-            io:format("Failed to initialize NIF: ~p~n", [Reason]),
-            {skip, "NIF initialization failed"}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {3, 5, 7}).
 
 end_per_suite(_Config) ->
     ok.
 
 test_basic_crypto(_Config) ->
-    % Test basic crypto functionality
-    crypto_ok = signal_nif:test_crypto(),
-    ok.
+    ok = dr_test_helpers:nifs_loaded().
 
 test_curve25519_keypair(_Config) ->
     % Test Curve25519 key pair generation

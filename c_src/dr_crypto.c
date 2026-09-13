@@ -3,8 +3,6 @@
 #include <limits.h>
 #include <sodium.h>
 #include <openssl/evp.h>
-#include <openssl/crypto.h>
-#include <openssl/params.h>
 #include "dr.h"
 #include "dr_crypto.h"
 #include "dr_proto.h"
@@ -182,8 +180,8 @@ int dr_try_decrypt_header(unsigned char *out_plain,
                           size_t enc_header_len,
                           const unsigned char *header_key) {
     if (enc_header_len != DR_ENC_HEADER_LEN) return -1;
-    size_t ct_len = enc_header_len - 16;
-    if (ct_len > out_plain_cap) return -1;
+    size_t ct_len = enc_header_len - DR_HEADER_IV_LEN;
+    if (ct_len + 16 > out_plain_cap) return -1;
     const unsigned char *iv = enc_header;
     const unsigned char *ciphertext = enc_header + 16;
 
@@ -253,39 +251,25 @@ int dr_try_decrypt_header(unsigned char *out_plain,
 
 // Compute the Signal-spec MAC: HMAC-SHA-256(mac_key, sender_id_pub(32) ||
 // receiver_id_pub(32) || version(1) || serialized_message), truncated to the
-// first 8 bytes. Uses the OpenSSL 3 EVP_MAC API; the legacy HMAC_*
-// interface is deprecated.
+// first 8 bytes. libsodium's streaming HMAC is used (same primitive hkdf_sha256
+// already relies on); it needs no per-call algorithm fetch or provider lock,
+// unlike OpenSSL's EVP_MAC API.
 int dr_compute_mac(unsigned char *out_mac,
                    const unsigned char *mac_key,
                    const unsigned char *sender_id_pub,
                    const unsigned char *receiver_id_pub,
                    unsigned char version,
                    const unsigned char *serialized, size_t serialized_len) {
-    unsigned char full_mac[32];
-    size_t full_mac_len = 0;
-    EVP_MAC *mac_algo = EVP_MAC_fetch(NULL, "HMAC", NULL);
-    if (!mac_algo) return -1;
-    EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac_algo);
-    int ok = 0;
-    if (!ctx) goto done;
-    char sha256[] = "SHA256";  // OSSL_PARAM_construct_utf8_string wants char *
-    OSSL_PARAM params[] = {
-        OSSL_PARAM_construct_utf8_string("digest", sha256, 0),
-        OSSL_PARAM_construct_end()
-    };
-    if (EVP_MAC_init(ctx, mac_key, 32, params) != 1) goto done;
-    if (EVP_MAC_update(ctx, sender_id_pub, 32) != 1) goto done;
-    if (EVP_MAC_update(ctx, receiver_id_pub, 32) != 1) goto done;
-    if (EVP_MAC_update(ctx, &version, 1) != 1) goto done;
-    if (EVP_MAC_update(ctx, serialized, serialized_len) != 1) goto done;
-    if (EVP_MAC_final(ctx, full_mac, &full_mac_len, sizeof(full_mac)) != 1)
-        goto done;
-    if (full_mac_len < DR_MAC_LEN) goto done;
-    memcpy(out_mac, full_mac, DR_MAC_LEN);
-    ok = 1;
-done:
-    EVP_MAC_CTX_free(ctx);
-    EVP_MAC_free(mac_algo);
+    unsigned char full_mac[crypto_auth_hmacsha256_BYTES];
+    crypto_auth_hmacsha256_state st;
+    int ok = crypto_auth_hmacsha256_init(&st, mac_key, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, sender_id_pub, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, receiver_id_pub, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, &version, 1) == 0 &&
+             crypto_auth_hmacsha256_update(&st, serialized, serialized_len) == 0 &&
+             crypto_auth_hmacsha256_final(&st, full_mac) == 0;
+    if (ok) memcpy(out_mac, full_mac, DR_MAC_LEN);
+    sodium_memzero(&st, sizeof(st));
     sodium_memzero(full_mac, sizeof(full_mac));
     return ok ? 0 : -1;
 }

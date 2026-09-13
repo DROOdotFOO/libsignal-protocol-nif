@@ -17,9 +17,7 @@
 // from the input values). Field 4 carries the encrypted body.
 // ============================================================================
 
-// Encode an unsigned 64-bit value as protobuf varint. Returns bytes written
-// (1-10). Buffer must have at least 10 bytes.
-static size_t pb_encode_varint(unsigned char *out, uint64_t value) {
+size_t pb_encode_varint(unsigned char *out, uint64_t value) {
     size_t n = 0;
     while (value >= 0x80) {
         out[n++] = (unsigned char)((value & 0x7F) | 0x80);

@@ -1,14 +1,8 @@
 #include <erl_nif.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <limits.h>
-#include <time.h>
 #include <stdbool.h>
 #include <sodium.h>
-#include <openssl/evp.h>
-#include <openssl/crypto.h>
-#include <openssl/params.h>
 #include "dr.h"
 #include "dr_chain.h"
 #include "dr_crypto.h"
@@ -212,6 +206,9 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
         err = "encryption_failed"; goto cleanup;
     }
     enc_header_len = 16 + header_ct_len;
+    // Mirror of the receiver's pin: a legitimate header is always exactly
+    // DR_ENC_HEADER_LEN. Refuse to emit anything the peer would reject.
+    if (enc_header_len != DR_ENC_HEADER_LEN) { err = "encryption_failed"; goto cleanup; }
 
     // Outer envelope protobuf: {enc_header = 1, ciphertext = 2}.
     // Max overhead: 2 tags + 2 varints = 22 bytes.
@@ -450,7 +447,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     const char *err = NULL;
     double_ratchet_state_t state;
-    unsigned char header_plain[64];
+    unsigned char header_plain[DR_HEADER_PLAIN_CAP];
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     unsigned char cipher_key[32], mac_key[32], iv[16];
     unsigned char expected_mac[DR_MAC_LEN];
@@ -583,7 +580,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                        DR_VERSION_BYTE, envelope, envelope_len) != 0) {
         err = "mac_failed"; goto cleanup;
     }
-    if (CRYPTO_memcmp(expected_mac, received_mac, DR_MAC_LEN) != 0) {
+    if (sodium_memcmp(expected_mac, received_mac, DR_MAC_LEN) != 0) {
         err = "bad_mac"; goto cleanup;
     }
 

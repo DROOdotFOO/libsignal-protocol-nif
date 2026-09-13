@@ -11,18 +11,18 @@ Toolchain pinned in `.tool-versions`: Erlang/OTP 26.2.4, Elixir 1.16.3-otp-26, r
 ## Build
 
 ```bash
-make build           # cmake + make in c_src/, then fan NIFs out to _build/*/lib/nif/priv/
-make clean           # rm priv/*.{so,dylib,dll} and c_src/build
-make ci-build        # CI variant — parallel make, only fans out signal_nif.so
+make build           # cmake + make in c_src/ -> priv/{signal_nif,libsignal_protocol_nif}.so; fails if either is missing
+make clean           # rm priv/*.so and c_src/build
+make ci-build        # CI variant — parallel make, same outputs and checks
 make diagnose        # prints state of build dirs; flags nested c_src/build/c_src corruption
 ```
 
 `make build` produces **two** shared libraries in `priv/` (each has its own `.c` entry point and `add_library` in `c_src/CMakeLists.txt`):
 
-- `signal_nif.{so,dylib}` — lower-level crypto primitives (`src/signal_nif.erl` / `c_src/signal_nif.c`)
-- `libsignal_protocol_nif.{so,dylib}` — main module (`src/libsignal_protocol_nif.erl` / `c_src/libsignal_protocol_nif.c`), includes session, X3DH, double ratchet (DR-HE), PKSM, keys
+- `signal_nif.so` — lower-level crypto primitives (`src/signal_nif.erl` / `c_src/signal_nif.c`)
+- `libsignal_protocol_nif.so` — main module (`src/libsignal_protocol_nif.erl` / `c_src/libsignal_protocol_nif.c`), includes session, X3DH, double ratchet (DR-HE), PKSM, keys
 
-After cmake produces the libs, the Makefile **and** `scripts/copy_nifs.sh` (a rebar3 post-compile hook in `rebar.config`) copy them into per-profile build dirs: `_build/{default,test,unit+test}/lib/nif/priv/` and matching `extras/test/priv/`. If the NIF loads in `default` but not in `unit+test`, the copy step is the suspect.
+BEAM expects `.so` on macOS too; nothing produces a `.dylib`. There is no copy step: rebar3 symlinks `_build/<profile>/lib/libsignal_protocol_nif/priv` to `priv/`, and both stubs resolve the library through `code:priv_dir/1` (see `src/libsignal_nif_loader.erl`). If a profile can't load the NIF, `priv/*.so` is missing — run `make build`.
 
 macOS-specific: `c_src/CMakeLists.txt` links each NIF with `-undefined dynamic_lookup` so `enif_*` symbols resolve at load time against the host BEAM (no explicit `erl_interface` link). The Makefile sets `DYLD_LIBRARY_PATH` for the openssl@3 keg so tests can find it.
 
@@ -37,12 +37,12 @@ make perf-test        # erl -eval 'performance_test:run_benchmarks()'
 make test-clean       # rm -rf tmp/ and log artifacts
 ```
 
-Rebar3 profiles in `rebar.config`: `test` (default suite) and `unit` (full coverage). The `unit` profile uses `test/erl/config/unit.config`. Test suites live under `test/erl/unit/{crypto,protocol}/*_SUITE.erl`; `test/erl/integration/performance/` holds `perf-test`'s helpers.
+Rebar3 profiles in `rebar.config`: `test` (default suite) and `unit` (full coverage). The `unit` profile uses `test/erl/config/unit.config`. Test suites live under `test/erl/unit/{primitives,protocol}/*_SUITE.erl` (the primitives dir must not be named `crypto` — a code-path directory with that name shadows OTP's `crypto` app and breaks its NIF load inside CT); `test/erl/integration/performance/` holds `perf-test`'s helpers.
 
 Run a single suite or case:
 
 ```bash
-rebar3 as unit ct --suite test/erl/unit/crypto/signal_crypto_SUITE
+rebar3 as unit ct --suite test/erl/unit/primitives/signal_crypto_SUITE
 rebar3 as unit ct --suite test/erl/unit/protocol/double_ratchet_SUITE --case alice_to_bob_first_message_roundtrips
 ```
 
@@ -57,7 +57,7 @@ Wrapper builds expect `priv/*.{so,dylib}` to exist — `mix.exs` does **not** bu
 
 ## Architecture
 
-Layered: `Erlang/Elixir/Gleam app` -> `*.erl NIF stub module (erl_src/)` -> `*.c NIF (c_src/)` -> `libsodium`. The `.erl` stubs use `-on_load(load_nif/0)` with a fallback path list (`priv/`, `./priv/`, `../priv/`, plus several rebar3 `_build/...` ancestors) — this is why the copy-fanout matters.
+Layered: `Erlang/Elixir/Gleam app` -> `*.erl NIF stub module (src/)` -> `*.c NIF (c_src/)` -> `libsodium`. Both stubs use `-on_load(load_nif/0)` and delegate path resolution to `src/libsignal_nif_loader.erl`: `code:priv_dir(libsignal_protocol_nif)` first, then `priv/` relative to CWD. A failed load fails closed (`{error, {nif_not_found, Lib, Tried}}` from `-on_load`), which the code server reports with every path tried.
 
 C source under `c_src/` is flat, split by concern across files:
 

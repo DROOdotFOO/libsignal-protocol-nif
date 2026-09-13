@@ -19,8 +19,11 @@ typedef struct {
     int seen_payload;
 } dr_message_t;
 
-// Protobuf varint decode. Sets *value and *consumed. Returns 0 on success,
-// -1 on truncation or overflow (>10 bytes).
+// Protobuf varint codec, shared with pksm.c.
+// Encode: returns bytes written (1-10); `out` must have capacity >= 10.
+size_t pb_encode_varint(unsigned char *out, uint64_t value);
+// Decode: sets *value and *consumed. Returns 0 on success, -1 on truncation
+// or overflow (>10 bytes).
 int pb_decode_varint(const unsigned char *in, size_t in_len,
                      uint64_t *value, size_t *consumed);
 

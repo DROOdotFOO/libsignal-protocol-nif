@@ -306,8 +306,7 @@ adv_ed25519_verify_wrong_pubkey_size(_) ->
 %% shorter keys and silently truncates longer ones. Pin the RFC semantics with
 %% RFC 4231 known-answer vectors (test cases 1-4, 6) covering 4-, 20-, 25- and
 %% 131-byte keys, plus the empty key and exact 32/64-byte keys (computed with
-%% OTP crypto). OTP's own `crypto` is not usable from inside this suite: the
-%% `test/erl/unit/crypto` source dir shadows the crypto app on the code path.
+%% OTP crypto:mac/4).
 %% ============================================================================
 
 adv_hmac_key_lengths_rfc4231(_) ->
