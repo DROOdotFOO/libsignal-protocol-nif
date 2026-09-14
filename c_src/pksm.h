@@ -33,6 +33,19 @@ typedef struct {
     size_t message_len;
 } pksm_t;
 
+// Worst-case protobuf overhead on top of the inner message, i.e. the
+// smallest out_cap that always succeeds for 32-byte keys:
+//   6 field tags                                        =  6
+//   registration_id, pre_key_id, signed_pre_key_id      = 15  (5-byte varints)
+//   base_key len + identity_key len                     =  2
+//   base_key + identity_key                             = 64
+//   inner message length varint                         =  5
+// Every uint32 id can reach 2^32-1, so all three varints must be budgeted at
+// their maximum; under-sizing this shows up as {error, pksm_encode_failed}
+// for large key ids rather than as an overflow (pksm_encode bounds-checks
+// every write).
+#define PKSM_MAX_OVERHEAD 92
+
 // Serialize the protobuf body. Writes at most out_cap bytes to out and
 // returns the number written, or -1 on overflow. Pass has_pre_key_id=0 to
 // omit field 4 (Alice didn't use an OPK). All other fields are required.

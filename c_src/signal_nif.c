@@ -394,19 +394,21 @@ static ERL_NIF_TERM aes_gcm_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), plaintext_term);
 }
 
-// Define the NIF function array with the correct 4-field structure for Erlang 27
+// Dispatch table. Hashing, HMAC and AES-GCM run over caller-sized binaries
+// with no upper bound, so they take a dirty CPU scheduler; key generation
+// and signature operations are fixed-size and stay on a normal one.
 static ErlNifFunc nif_funcs[] = {
-    {"sha256", 1, sha256, 0},
+    {"sha256", 1, sha256, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"generate_curve25519_keypair", 0, generate_curve25519_keypair, 0},
     {"generate_ed25519_keypair", 0, generate_ed25519_keypair, 0},
-    {"sign_data", 2, sign_data, 0},
-    {"verify_signature", 3, verify_signature, 0},
+    {"sign_data", 2, sign_data, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"verify_signature", 3, verify_signature, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ed25519_sk_to_curve25519", 1, ed25519_sk_to_curve25519, 0},
     {"ed25519_pk_to_curve25519", 1, ed25519_pk_to_curve25519, 0},
-    {"sha512", 1, sha512, 0},
-    {"hmac_sha256", 2, hmac_sha256, 0},
-    {"aes_gcm_encrypt", 5, aes_gcm_encrypt, 0},
-    {"aes_gcm_decrypt", 6, aes_gcm_decrypt, 0}
+    {"sha512", 1, sha512, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"hmac_sha256", 2, hmac_sha256, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"aes_gcm_encrypt", 5, aes_gcm_encrypt, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"aes_gcm_decrypt", 6, aes_gcm_decrypt, ERL_NIF_DIRTY_JOB_CPU_BOUND}
 };
 
 static int on_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)

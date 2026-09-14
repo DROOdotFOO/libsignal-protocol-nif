@@ -11,14 +11,19 @@
 #define DR_CHAIN_KEY_SIZE 32
 #define DR_MESSAGE_KEY_SIZE 32
 #define DR_HEADER_KEY_SIZE 32
-
-// MKSKIPPED bounds. MAX_SKIP gates DOS: it is a per-receive budget shared
-// across both sides of a DH ratchet (PN tail + N prefix), so one message can
-// insert at most MAX_SKIP keys. MAX_SKIPPED_KEYS is twice that so a single
-// receive can never evict keys cached by the previous receive; eviction is
-// LRU beyond that.
+// MKSKIPPED bounds. MAX_SKIP is the Signal-spec per-chain cap on how many
+// message keys one receive may derive and bank; a receive that crosses a DH
+// ratchet skips at most MAX_SKIP on the old chain plus MAX_SKIP on the new
+// one, so a single message can bank up to 2 * MAX_SKIP keys. MAX_SKIPPED_KEYS
+// is sized one budget above that worst case: a full-budget receive still
+// leaves a chain's worth of earlier keys resident. Beyond that, insertion
+// evicts the least recently inserted slot, and the dropped message becomes an
+// unrecoverable bad_mac -- see docs/SECURITY.md.
+//
+// Changing either constant changes the session blob size, which is pinned by
+// test/erl/unit/protocol/dr_he_bootstrap_SUITE.erl:dr_state_size_pinned.
 #define MAX_SKIP 32
-#define MAX_SKIPPED_KEYS (2 * MAX_SKIP)
+#define MAX_SKIPPED_KEYS (3 * MAX_SKIP)
 
 // Skipped message-key cache entry. Indexed by (header_key, message_number).
 // With DR-HE the receiver cannot see dh_pub or message_number until the
@@ -107,6 +112,9 @@ typedef struct {
 #define DR_STATE_SIZE sizeof(double_ratchet_state_t)
 #define DR_STATE_MAGIC 0x44525331u  // "DRS1"
 #define DR_STATE_VERSION 1u
+// The `size` tag field is a uint16_t, so the layout guard silently aliases
+// two different structs once the state outgrows it.
+_Static_assert(DR_STATE_SIZE <= UINT16_MAX, "session blob size tag would truncate");
 
 
 ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);

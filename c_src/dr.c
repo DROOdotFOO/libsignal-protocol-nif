@@ -213,7 +213,7 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     unsigned char next_chain[DR_CHAIN_KEY_SIZE];
     unsigned char cipher_key[32], mac_key[32], iv[16];
-    unsigned char inner_header[64];
+    unsigned char inner_header[DR_INNER_HEADER_MAX];
     unsigned char enc_header[DR_ENC_HEADER_LEN];
     unsigned char mac[DR_MAC_LEN];
     unsigned char *cbc_buf = NULL;
@@ -248,7 +248,8 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
     // previous_counter); 38..46 bytes. Sealed under the current send header
     // key as iv(16) || AES-CBC(48) || tag(16) = DR_ENC_HEADER_LEN; the tag
     // lets the receiver reject forged headers before any decryption.
-    inner_header_len = dr_serialize_header(inner_header, state->dh_send_public, 32,
+    inner_header_len = dr_serialize_header(inner_header, sizeof(inner_header),
+                                           state->dh_send_public, 32,
                                            state->send_message_number,
                                            state->prev_send_length);
     if (dr_seal_header(enc_header, state->header_key_send,
@@ -416,12 +417,12 @@ ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     if (err) goto cleanup;
 
     // PKSM body: registration_id, base_key(32), identity_key(32), optional
-    // pre_key_id, signed_pre_key_id, inner_message. Worst-case overhead is
-    // 6 tags + 6 varints + the two 32B keys = ~80B + inner.
-    pksm_buf = enif_alloc(80 + inner_wire_len);
+    // pre_key_id, signed_pre_key_id, inner_message. See PKSM_MAX_OVERHEAD --
+    // all three ids are uint32 and must be budgeted at a 5-byte varint each.
+    pksm_buf = enif_alloc(PKSM_MAX_OVERHEAD + inner_wire_len);
     if (!pksm_buf) { err = "memory_allocation_failed"; goto cleanup; }
 
-    pksm_len = pksm_encode(pksm_buf, 80 + inner_wire_len,
+    pksm_len = pksm_encode(pksm_buf, PKSM_MAX_OVERHEAD + inner_wire_len,
                            registration_id,
                            base_key.data, base_key.size,
                            state.local_identity_pub_ed, crypto_sign_PUBLICKEYBYTES,
@@ -484,6 +485,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     unsigned char cipher_key[32], mac_key[32], iv[16];
     unsigned char expected_mac[DR_MAC_LEN];
     unsigned char *pt_buf = NULL;
+    size_t pt_buf_cap = 0;
     size_t plaintext_len = 0;
     size_t body_ct_len = 0;
     ERL_NIF_TERM decrypted_term = 0;
@@ -544,8 +546,26 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         path = PATH_RATCHET;
         found = 1;
     } else {
+        // Up to MAX_SKIP slots of one chain share a single header key, so
+        // trial-opening per slot would repeat the same HKDF dozens of times
+        // for a packet that authenticates under nothing. Try each distinct
+        // key once. Slots whose header key is all-zero are never candidates:
+        // such a key is publicly computable, so accepting one would let a
+        // third party forge an authentic-looking message.
         for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
             if (!state.mkskipped[i].occupied) continue;
+            if (!hk_is_nonzero(state.mkskipped[i].header_key)) continue;
+            int seen = 0;
+            for (int j = 0; j < i; j++) {
+                if (state.mkskipped[j].occupied &&
+                    sodium_memcmp(state.mkskipped[j].header_key,
+                                  state.mkskipped[i].header_key,
+                                  DR_HEADER_KEY_SIZE) == 0) {
+                    seen = 1;
+                    break;
+                }
+            }
+            if (seen) continue;
             if (dr_try_decrypt_header(header_plain, sizeof(header_plain),
                                       &header_plain_len, &inner,
                                       enc_header, enc_header_len,
@@ -554,9 +574,9 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 int idx = mkskipped_find(&state, state.mkskipped[i].header_key,
                                          inner.counter);
                 if (idx < 0) {
-                    // Header decrypted under a chain's HK, but no cached
-                    // message_key for that counter -- treat as malformed
-                    // since we have nowhere to take this from.
+                    // Header authenticates under a chain's HK, but no cached
+                    // message_key for that counter -- already consumed, or
+                    // never skipped. Nothing to decrypt with.
                     err = "bad_mac"; goto cleanup;
                 }
                 matched_skipped_idx = idx;
@@ -569,12 +589,10 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if (!found) { err = "bad_mac"; goto cleanup; }
 
-    // Apply path-specific state advance and derive the message key. One
-    // MAX_SKIP budget covers the whole receive: for a ratchet message that
-    // is the tail of the previous chain (PN) plus the skipped prefix of the
-    // new one (N) together, so a single message can never insert more than
-    // MAX_SKIP keys into MKSKIPPED.
-    unsigned int skip_budget = MAX_SKIP;
+    // Apply path-specific state advance and derive the message key. Each
+    // skip is bounded by MAX_SKIP per chain (Signal spec), so a receive that
+    // crosses a DH ratchet may bank up to 2 * MAX_SKIP keys -- MKSKIPPED is
+    // sized for that plus a chain (see dr.h).
     if (path == PATH_SKIPPED) {
         mkskipped_pop(&state, matched_skipped_idx, message_key);
     } else if (path == PATH_CURRENT) {
@@ -588,7 +606,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             if (idx < 0) { err = "bad_mac"; goto cleanup; }
             mkskipped_pop(&state, idx, message_key);
         } else {
-            if (skip_message_keys(&state, inner.counter, &skip_budget) != 0) {
+            if (skip_message_keys(&state, inner.counter) != 0) {
                 err = "too_many_skipped"; goto cleanup;
             }
             derive_message_key(message_key, state.recv_chain_key);
@@ -596,13 +614,13 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             state.recv_message_number++;
         }
     } else { // PATH_RATCHET
-        if (skip_message_keys(&state, inner.previous_counter, &skip_budget) != 0) {
+        if (skip_message_keys(&state, inner.previous_counter) != 0) {
             err = "too_many_skipped"; goto cleanup;
         }
         if (dh_ratchet_recv(&state, inner.ratchet_key) != 0) {
             err = "dh_ratchet_failed"; goto cleanup;
         }
-        if (skip_message_keys(&state, inner.counter, &skip_budget) != 0) {
+        if (skip_message_keys(&state, inner.counter) != 0) {
             err = "too_many_skipped"; goto cleanup;
         }
         derive_message_key(message_key, state.recv_chain_key);
@@ -627,11 +645,15 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     // MAC OK -- decrypt body. PKCS#7 padding is validated by EVP_DecryptFinal;
     // the padding-oracle channel is closed since we already verified the MAC.
-    pt_buf = enif_alloc(body_ct_len);
+    // EVP wants inl + block_size of room (see dr_aes_cbc_decrypt).
+    pt_buf_cap = body_ct_len + 16;
+    pt_buf = enif_alloc(pt_buf_cap);
     if (!pt_buf) { err = "memory_allocation_failed"; goto cleanup; }
     if (dr_aes_cbc_decrypt(pt_buf, &plaintext_len,
                            body_ct, body_ct_len,
                            cipher_key, iv) != 0) {
+        // Every block but the last has already been written, so the buffer
+        // holds real plaintext even on this path; cleanup scrubs it.
         err = "decryption_failed"; goto cleanup;
     }
 
@@ -640,7 +662,6 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             enif_make_new_binary(env, plaintext_len, &decrypted_term);
         memcpy(decrypted_data, pt_buf, plaintext_len);
     }
-    sodium_memzero(pt_buf, body_ct_len);  // plaintext held briefly in pt_buf
 
 cleanup:
     sodium_memzero(header_plain, sizeof(header_plain));
@@ -648,7 +669,10 @@ cleanup:
     sodium_memzero(cipher_key, sizeof(cipher_key));
     sodium_memzero(mac_key, sizeof(mac_key));
     sodium_memzero(iv, sizeof(iv));
-    if (pt_buf) enif_free(pt_buf);
+    if (pt_buf) {
+        sodium_memzero(pt_buf, pt_buf_cap);  // plaintext held briefly in pt_buf
+        enif_free(pt_buf);
+    }
 
     if (err) {
         sodium_memzero(&state, sizeof(state));

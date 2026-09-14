@@ -84,4 +84,4 @@ Wrapper structure: `wrappers/elixir/lib/{signal_protocol,pre_key_bundle}.ex` cal
 
 ## Release
 
-Versioning via `VERSION` (currently `0.2.0`) and `scripts/release.sh`. `make release-{patch,minor,major}` drives it. `make publish-wrappers` runs `mix hex.publish` and `rebar3 hex publish` from each wrapper after a fresh build. CI lives in `.github/workflows/{ci.yml,gleam-ci.yml}`.
+Versioning via `VERSION` (currently `0.3.0`) and `scripts/release.sh`. `make release-{patch,minor,major}` drives it. `make publish-wrappers` runs `mix hex.publish` and `rebar3 hex publish` from each wrapper after a fresh build. CI lives in `.github/workflows/{ci.yml,gleam-ci.yml}`.

@@ -153,9 +153,9 @@ version_byte(0x33)
   || mac(8)   %% HMAC-SHA-256 over sender_id||receiver_id||version||outer protobuf
 ```
 
-`enc_header` is always exactly 80 bytes: a random IV, one 48-byte CBC block-triple (the inner header is 38..46 bytes), and a 16-byte truncated HMAC-SHA-256 over `iv || ct` under a MAC key derived alongside the cipher key from the header key. The receiver trial-opens it against the current receive header key, the next one, and each MKSKIPPED entry: the tag is checked first (constant time), so a header that does not authenticate under a key is never decrypted or parsed. Any other length is rejected as `malformed_message` before any key is used. MKSKIPPED is a 64-slot LRU; one `MAX_SKIP=32` budget covers a whole receive, including both sides of a DH ratchet (previous-chain tail plus new-chain prefix), so a single message can never insert more than 32 keys and never evicts the previous receive's keys.
+`enc_header` is always exactly 80 bytes: a random IV, one 48-byte CBC block-triple (the inner header is 38..46 bytes), and a 16-byte truncated HMAC-SHA-256 over `iv || ct` under a MAC key derived alongside the cipher key from the header key. The receiver trial-opens it against the current receive header key, the next one, and each distinct MKSKIPPED header key: the tag is checked first (constant time), so a header that does not authenticate under a key is never decrypted or parsed. Any other length is rejected as `malformed_message` before any key is used. MKSKIPPED is a 96-slot LRU; `MAX_SKIP=32` bounds each chain, so a receive that crosses a DH ratchet can bank at most 64 keys and always leaves a chain's worth of earlier ones resident.
 
-Errors: `invalid_session_size` (blob is not this build's session length), `invalid_session` (right length, wrong magic/version tag -- a blob from another release or corrupt), `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key authenticates the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
+Errors: `invalid_session_size` (blob is not this build's session length), `invalid_session` (right length, wrong magic/version tag -- a blob from another release or corrupt), `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key authenticates the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages on either chain), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
 
 The session binary is opaque: pass it back unmodified. It opens with an 8-byte `magic || version || size` tag, so a blob produced by a different release (or any corrupted buffer) is rejected at the NIF boundary instead of being reinterpreted as key material.
 
@@ -222,7 +222,7 @@ Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom a
 | AES-GCM IV              | 12 bytes                                 |
 | AES-GCM tag             | 16 bytes                                 |
 | X3DH shared secret      | 96 bytes (root 32 \|\| seed_a 32 \|\| seed_b 32) |
-| DR session blob         | `sizeof(double_ratchet_state_t)`, ~5.3 KB, 8-byte version tag at the head; layout is compiler/ABI-specific, see `SECURITY.md` |
+| DR session blob         | `sizeof(double_ratchet_state_t)`, ~7.6 KB, 8-byte version tag at the head; layout is compiler/ABI-specific, see `SECURITY.md` |
 | DR MAC                  | 8 bytes (truncated HMAC-SHA-256)         |
 | DR `enc_header`         | 80 bytes (iv 16 \|\| AES-CBC 48 \|\| tag 16) |
 | PreKeyBundle wire       | 128 bytes (160 with OPK)                 |

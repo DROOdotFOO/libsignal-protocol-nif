@@ -58,6 +58,9 @@ int dr_aes_cbc_encrypt(unsigned char *out_buf, size_t *out_len,
                        const unsigned char *key, const unsigned char *iv);
 
 // AES-256-CBC decrypt + PKCS#7 unpad. Caller must have verified the MAC first.
+// out_buf must have capacity >= ciphertext_len + 16: EVP_DecryptUpdate may
+// emit up to inl bytes and EVP_DecryptFinal_ex up to one more block before
+// the padding is stripped.
 int dr_aes_cbc_decrypt(unsigned char *out_buf, size_t *out_len,
                        const unsigned char *ciphertext, size_t ciphertext_len,
                        const unsigned char *key, const unsigned char *iv);

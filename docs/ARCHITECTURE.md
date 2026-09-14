@@ -47,7 +47,7 @@ Bob's side reconstructs the same 96 bytes from his stored privs plus values from
 
 ### Double Ratchet with header encryption
 
-The DR session struct (`double_ratchet_state_t` in `dr.h`) carries an 8-byte `magic || version || size` tag, the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 64-slot MKSKIPPED LRU cache. Serialized blob is roughly 5.3 KB. The struct layout *is* the persistence format; `dr_state_load`/`dr_state_store` in `dr.c` are the only places it crosses the NIF boundary, and load validates the tag and normalises every `bool` byte before anything reads them.
+The DR session struct (`double_ratchet_state_t` in `dr.h`) carries an 8-byte `magic || version || size` tag, the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, the local identity pub in Ed25519 form for the PKSM envelope, and a 96-slot MKSKIPPED LRU cache. Serialized blob is roughly 7.6 KB. The struct layout *is* the persistence format; `dr_state_load`/`dr_state_store` in `dr.c` are the only places it crosses the NIF boundary, and load validates the tag and normalises every `bool` byte before anything reads them.
 
 Wire envelope:
 
@@ -65,7 +65,7 @@ version_byte(0x33)
 
 Receive first pins `enc_header` to exactly 80 bytes and the body to a non-zero multiple of 16, then trial-opens `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key: the header tag is verified in constant time and only a header that authenticates is CBC-decrypted and parsed. MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is not available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
 
-One `MAX_SKIP = 32` budget per receive bounds DOS and spans both sides of a DH ratchet (previous-chain tail plus new-chain prefix). Anything beyond returns `too_many_skipped`. MKSKIPPED holds 64 entries so a full-budget receive cannot evict the previous receive's keys.
+`MAX_SKIP = 32` bounds each chain (Signal spec), so a receive that crosses a DH ratchet may skip up to 32 on the old chain and 32 on the new one; anything beyond returns `too_many_skipped`. MKSKIPPED holds `3 * MAX_SKIP` entries, one budget above that worst case, so a full two-chain receive still leaves a chain's worth of earlier keys resident.
 
 ### PreKeySignalMessage envelope
 

@@ -13,7 +13,7 @@ If you're considering this for production, treat it as pre-audit and pin a speci
 - **X3DH** key agreement (RFC-style; Signal info string variation noted below).
 - **Double Ratchet with header encryption (DR-HE)** matching the Signal wire format: AES-256-CBC + HMAC-SHA-256 truncated to 8 bytes, body IV derived per message via HKDF, encrypted protobuf header (random 16-byte IV, shipped in the clear), version byte `0x33`.
 - **PreKeySignalMessage** envelope for Alice's first message (carries pre-key ids + ephemeral pub so Bob can identify which of his stored keys to consume).
-- **MKSKIPPED** cache for out-of-order delivery -- bounded 64-slot LRU; one `MAX_SKIP=32` budget per receive spanning both sides of a DH ratchet, so a single message can never evict the previous receive's cached keys.
+- **MKSKIPPED** cache for out-of-order delivery -- 96 slots (`3 * MAX_SKIP`). `MAX_SKIP = 32` bounds each chain, so one receive that crosses a DH ratchet banks at most 64 keys and always leaves a chain's worth of earlier keys resident. Past that, insertion evicts the least recently inserted slot and the dropped message becomes an unrecoverable `bad_mac` -- three consecutive worst-case receives can still evict in-flight keys, and the library gives the application no way to tell eviction from forgery.
 - **Authenticated header encryption.** Each DR-HE header carries a 16-byte HMAC-SHA-256 tag (key derived with the header cipher key from the header key) that is verified in constant time before the header is CBC-decrypted or parsed. Header keys are seeded per direction from distinct halves of the X3DH output, so a message reflected to its sender authenticates under none of the sender's receive keys.
 - **Constant-time MAC verify** (`sodium_memcmp`) on both MACs: the header tag before the header is decrypted, the outer MAC before the body is decrypted. No padding oracle is reachable on either.
 - **Structural bounds before crypto.** The encrypted header is pinned to exactly 80 bytes on the wire and rejected before any key is touched; the body ciphertext must be a non-zero multiple of 16. Both checks run before any MAC or decryption.
@@ -68,6 +68,11 @@ These differences mean DR sessions are not on-the-wire compatible with a stock l
 **In scope.** A passive on-path attacker who reads ciphertexts; a network attacker who can drop, reorder, or modify messages; bundle-substitution attempts (the Ed25519 signature on the signed pre-key blocks the published-bundle forgery that bit the 0.1 line, provided the embedder verifies the identity key out of band -- the bundle is self-describing and X3DH does not pin identities for you).
 
 **Partially in scope.** Replay: the Double Ratchet rejects a repeated message once its key has been consumed (`bad_mac`), but a `PreKeySignalMessage` can be replayed to re-derive the initial session unless the one-time pre-key it consumed has been deleted.
+
+**Embedder's responsibility.** Two downgrades the library cannot detect for you:
+
+- **One-time pre-key stripping.** Only the signed pre-key is covered by the bundle signature, so an active attacker or a malicious key server can serve a 128-byte bundle where you published a 160-byte one. X3DH still succeeds on the 3-DH path, no OPK is consumed or deleted, and PKSM replay is silently back. The NIF pins bundles to exactly 128 or 160 bytes and rejects everything else, but it cannot know which one you published -- pin OPK presence out of band if you rely on it.
+- **Responder identity.** `pksm_decode/1` returns the `identity_key` the sender put on the wire. Binding a session to it unverified is trust-on-first-use: a forged envelope yields a different DH and dies at `bad_mac`, so nothing is decrypted under the wrong identity, but the session you create is bound to whatever the first packet asserted. Compare it against a pinned identity before calling `process_pre_key_bundle_bob/5`.
 
 **Out of scope.** A peer who logs plaintext after decrypt; a compromised device; an attacker with arbitrary memory read on the host process; an attacker who can replace the loaded `.so`; side-channel attacks on the host CPU.
 

@@ -50,7 +50,13 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     //   ed_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)
     //   ++ [one_time_prekey_pub(32)]
     size_t min_bundle_size = 32 + 32 + crypto_sign_BYTES;  // 128
-    if (bundle.size < min_bundle_size) {
+    // Exactly 128 (no OPK) or 160 (with one). Inferring OPK presence from
+    // "at least 160" would let a trailing-byte-padded bundle through, and
+    // accepting 129..159 would silently drop bytes. Note the signature only
+    // covers the SPK: an active attacker can still *remove* the OPK to force
+    // the 3-DH path, which is why OPK presence must be pinned out of band
+    // (see docs/SECURITY.md).
+    if (bundle.size != min_bundle_size && bundle.size != min_bundle_size + 32) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_bundle_size"));
     }
@@ -59,7 +65,7 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     unsigned char *signed_prekey = bundle.data + 32;
     unsigned char *signature = bundle.data + 64;
     unsigned char *one_time_prekey = NULL;
-    bool has_one_time_prekey = (bundle.size >= min_bundle_size + 32);
+    bool has_one_time_prekey = (bundle.size == min_bundle_size + 32);
     if (has_one_time_prekey) {
         one_time_prekey = bundle.data + min_bundle_size;
     }
@@ -137,7 +143,8 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
         err = "kdf_failed"; goto cleanup;
     }
 
-    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
+    // SessionKey is 96B: [0..32)=DR root key, [32..64)=header-key seed A,
+    // [64..96)=header-key seed B. dr_init assigns the two seeds by role.
     {
         unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
         unsigned char *ephemeral_pub_data = enif_make_new_binary(env, 32, &ephemeral_pub_term);
@@ -262,7 +269,8 @@ ERL_NIF_TERM process_pre_key_bundle_bob(ErlNifEnv *env, int argc, const ERL_NIF_
         err = "kdf_failed"; goto cleanup;
     }
 
-    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
+    // SessionKey is 96B: [0..32)=DR root key, [32..64)=header-key seed A,
+    // [64..96)=header-key seed B. dr_init assigns the two seeds by role.
     {
         unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
         memcpy(session_data, session_key, 96);

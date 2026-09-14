@@ -8,7 +8,7 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
 -export([reorder_two_messages/1, reorder_five_messages/1, reorder_across_dh_ratchet/1,
-         skip_bound_rejected/1, skip_budget_spans_dh_ratchet/1,
+         skip_bound_rejected/1, skip_budget_is_per_chain/1,
          previous_receive_keys_survive_ratchet_skip/1, random_permutations_property/1]).
 
 -define(MAX_SKIP, 32).
@@ -18,7 +18,7 @@ all() ->
      reorder_five_messages,
      reorder_across_dh_ratchet,
      skip_bound_rejected,
-     skip_budget_spans_dh_ratchet,
+     skip_budget_is_per_chain,
      previous_receive_keys_survive_ratchet_skip,
      random_permutations_property].
 
@@ -105,29 +105,39 @@ skip_bound_rejected(Config) ->
     {_LastMsg, LastCT} = lists:last(Items),
     {error, too_many_skipped} = libsignal_protocol_nif:dr_decrypt(Bob0, LastCT).
 
-%% One MAX_SKIP budget covers a whole receive, including both sides of a DH
-%% ratchet: the tail of the previous chain (PN - received) plus the prefix
-%% of the new one (N). Exactly MAX_SKIP across the two must decrypt and every
-%% skipped key must later drain; one more must be rejected. Pre-fix each side
-%% had its own MAX_SKIP, so a single message could bank 2 * MAX_SKIP keys.
-skip_budget_spans_dh_ratchet(Config) ->
-    Half = ?MAX_SKIP div 2,
-    %% Exactly on budget: (Half+1 sent, 1 received) + Half = MAX_SKIP skipped.
-    {Bob, OldTail, NewPrefix, Last} = ratchet_with_skips(parties(Config), Half + 1, Half + 1),
-    {LastMsg, LastCT} = Last,
+%% MAX_SKIP is a per-chain bound (Signal spec), so one receive that crosses a
+%% DH ratchet may skip up to MAX_SKIP on the old chain *and* MAX_SKIP on the
+%% new one, and every key it banks must later drain. 0.3.0 briefly charged
+%% both sides against a single shared budget, which rejected ordinary
+%% reorders that 0.2 accepted -- e.g. PN=30 with 1 received plus N=10 is 39
+%% against a 32 budget, while each chain is individually well inside the cap.
+skip_budget_is_per_chain(Config) ->
+    %% 29 skipped on the old chain + 10 on the new: over a shared budget,
+    %% inside the per-chain one.
+    {Bob, OldTail, NewPrefix, {LastMsg, LastCT}} =
+        ratchet_with_skips(parties(Config), 30, 11),
     {ok, {LastMsg, Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, LastCT),
     _ = bob_receives(Bob1, shuffle(OldTail ++ NewPrefix)),
-    %% One over budget on the new-chain side.
-    {Bob2, _, _, {_, OverCT}} = ratchet_with_skips(parties(Config), Half + 1, Half + 2),
-    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(Bob2, OverCT)),
-    %% One over budget on the old-chain side.
-    {Bob3, _, _, {_, OverCT2}} = ratchet_with_skips(parties(Config), Half + 2, Half + 1),
-    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(Bob3, OverCT2)).
+
+    %% Both chains at exactly MAX_SKIP still decrypt and drain.
+    {BobB, OldTailB, NewPrefixB, {LastMsgB, LastCTB}} =
+        ratchet_with_skips(parties(Config), ?MAX_SKIP + 1, ?MAX_SKIP + 1),
+    {ok, {LastMsgB, BobB1}} = libsignal_protocol_nif:dr_decrypt(BobB, LastCTB),
+    _ = bob_receives(BobB1, shuffle(OldTailB ++ NewPrefixB)),
+
+    %% One past MAX_SKIP on the new chain is rejected.
+    {BobC, _, _, {_, OverCT}} =
+        ratchet_with_skips(parties(Config), 2, ?MAX_SKIP + 2),
+    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobC, OverCT)),
+
+    %% One past MAX_SKIP on the old chain is rejected.
+    {BobD, _, _, {_, OverCT2}} =
+        ratchet_with_skips(parties(Config), ?MAX_SKIP + 3, 2),
+    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobD, OverCT2)).
 
 %% Keys cached by an earlier receive must survive a later receive that banks
-%% a full MAX_SKIP budget. Pre-fix MKSKIPPED had exactly MAX_SKIP slots with
-%% LRU eviction, so one legitimate ratchet message silently dropped every
-%% still-in-flight key from before it.
+%% a full two-chain skip. MKSKIPPED is sized at 3 * MAX_SKIP so the worst
+%% single receive (2 * MAX_SKIP) still leaves a chain's worth resident.
 previous_receive_keys_survive_ratchet_skip(Config) ->
     {Alice0, Bob0} = parties(Config),
     %% Chain P: Alice sends 6, Bob receives only the last -> 5 keys cached.

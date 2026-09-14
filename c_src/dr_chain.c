@@ -25,7 +25,7 @@ int mkskipped_find(const double_ratchet_state_t *state,
         const skipped_key_t *slot = &state->mkskipped[i];
         if (slot->occupied &&
             slot->message_number == message_number &&
-            memcmp(slot->header_key, header_key, DR_HEADER_KEY_SIZE) == 0) {
+            sodium_memcmp(slot->header_key, header_key, DR_HEADER_KEY_SIZE) == 0) {
             return i;
         }
     }
@@ -78,25 +78,23 @@ void mkskipped_pop(double_ratchet_state_t *state, int index,
 
 // Skip and store keys in the current recv chain up to `until` (exclusive).
 // state->recv_chain_key advances as keys are derived; state->recv_message_number
-// is bumped to `until`. Each derived key consumes one unit of *budget; returns
-// -1 without touching state if the skip needs more than what remains.
-// No-op when the recv chain hasn't been established yet (Alice pre-receive).
-// Cached entries are keyed on state->header_key_recv at call time (the chain's
-// current receiving header key, used to trial-decrypt later late-deliveries).
+// is bumped to `until`. Bounded by MAX_SKIP per chain (Signal spec); returns
+// -1 without touching state if the skip would exceed it.
+//
+// No-op when there is no established receive chain to derive from -- either
+// the DH ratchet has not run yet, or it has but the receiving header key is
+// still the memset(0) value from dr_init. Deriving in the latter case would
+// cache message keys under an all-zero header key, and both that header key
+// and the chain it comes from are publicly computable.
 int skip_message_keys(double_ratchet_state_t *state,
-                      unsigned int until,
-                      unsigned int *budget) {
+                      unsigned int until) {
     if (until <= state->recv_message_number) {
         return 0;
     }
-    unsigned int needed = until - state->recv_message_number;
-    if (needed > *budget) {
+    if (until - state->recv_message_number > MAX_SKIP) {
         return -1;
     }
-    *budget -= needed;
-    if (!state->dh_recv_initialized) {
-        // No recv chain to derive from; treat as no-op. The DH ratchet that
-        // follows will establish the chain at message number 0.
+    if (!state->dh_recv_initialized || !hk_is_nonzero(state->header_key_recv)) {
         state->recv_message_number = until;
         return 0;
     }

@@ -20,7 +20,8 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([handshake_with_opk/1, handshake_without_opk/1, decode_malformed/1,
-         decode_truncated/1, decode_rejects_bad_key_lengths/1, bob_x3dh_matches_alice/1]).
+         decode_truncated/1, decode_rejects_bad_key_lengths/1, handshake_with_maximal_ids/1,
+         bob_x3dh_matches_alice/1]).
 
 all() ->
     [handshake_with_opk,
@@ -28,6 +29,7 @@ all() ->
      decode_malformed,
      decode_truncated,
      decode_rejects_bad_key_lengths,
+     handshake_with_maximal_ids,
      bob_x3dh_matches_alice].
 
 init_per_suite(Config) ->
@@ -171,6 +173,14 @@ forged_pksm(BaseLen, IdLen, Inner) ->
       16#1A, IdLen, (rand:bytes(IdLen))/binary,
       16#28, 9,
       16#32, (byte_size(Inner)), Inner/binary>>.
+
+%% registration_id, pre_key_id and signed_pre_key_id are all uint32 on the
+%% wire, so each can need a 5-byte varint. The encode buffer must budget for
+%% that: sizing it for "typical" small ids makes Alice's very first message
+%% fail with pksm_encode_failed once a deployment's id space grows, which is
+%% a fail-closed but total handshake break. libsignal ids run to 2^24.
+handshake_with_maximal_ids(_Config) ->
+    handshake_through_pksm(true, 16#FFFFFFFF, 16#FFFFFF, 16#FFFFFF).
 
 bob_x3dh_matches_alice(_Config) ->
     %% Same SK on both sides without going through PKSM. Covers the OPK and
