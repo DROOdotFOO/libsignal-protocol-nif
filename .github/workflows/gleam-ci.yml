@@ -46,6 +46,23 @@ jobs:
         make
         cd ..
 
+    # Same shim as the Elixir wrapper job in ci.yml: gleam.toml requires the
+    # NIF package so consumers resolve it, but an in-repo run cannot until
+    # that version is published. libsignal_protocol_gleam_ffi:test_setup/0
+    # puts the working tree's NIF ahead of any dependency copy, so the tests
+    # exercise this checkout either way. Disables itself once published.
+    - name: Drop unpublished NIF requirement (pre-release only)
+      run: |
+        version=$(tr -d '[:space:]' < VERSION)
+        url="https://hex.pm/api/packages/libsignal_protocol_nif/releases/$version"
+        status=$(curl -sS -o /dev/null -w '%{http_code}' "$url" || echo 000)
+        case "$status" in
+          200) echo "libsignal_protocol_nif $version is published; using the real requirement." ;;
+          404) echo "libsignal_protocol_nif $version not yet on Hex; dropping the requirement."
+               sed -i '/libsignal_protocol_nif/d' wrappers/gleam/gleam.toml ;;
+          *)   echo "Hex returned $status for $url -- refusing to guess."; exit 1 ;;
+        esac
+
     - name: Test Gleam wrapper
       run: |
         cd wrappers/gleam

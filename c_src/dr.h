@@ -3,6 +3,7 @@
 
 #include <erl_nif.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <sodium.h>
 
 // Constants for Double Ratchet
@@ -10,12 +11,19 @@
 #define DR_CHAIN_KEY_SIZE 32
 #define DR_MESSAGE_KEY_SIZE 32
 #define DR_HEADER_KEY_SIZE 32
-
-// MKSKIPPED bounds. MAX_SKIP gates DOS (an attacker sending message_number=N
-// would force N KDF rounds before erroring); MAX_SKIPPED_KEYS bounds memory.
-// Aligned so we don't derive keys we'd immediately discard.
-#define MAX_SKIPPED_KEYS 32
+// MKSKIPPED bounds. MAX_SKIP is the Signal-spec per-chain cap on how many
+// message keys one receive may derive and bank; a receive that crosses a DH
+// ratchet skips at most MAX_SKIP on the old chain plus MAX_SKIP on the new
+// one, so a single message can bank up to 2 * MAX_SKIP keys. MAX_SKIPPED_KEYS
+// is sized one budget above that worst case: a full-budget receive still
+// leaves a chain's worth of earlier keys resident. Beyond that, insertion
+// evicts the least recently inserted slot, and the dropped message becomes an
+// unrecoverable bad_mac -- see docs/SECURITY.md.
+//
+// Changing either constant changes the session blob size, which is pinned by
+// test/erl/unit/protocol/dr_he_bootstrap_SUITE.erl:dr_state_size_pinned.
 #define MAX_SKIP 32
+#define MAX_SKIPPED_KEYS (3 * MAX_SKIP)
 
 // Skipped message-key cache entry. Indexed by (header_key, message_number).
 // With DR-HE the receiver cannot see dh_pub or message_number until the
@@ -29,8 +37,18 @@ typedef struct {
     bool occupied;
 } skipped_key_t;
 
-// Double Ratchet state structure
+// Double Ratchet state. The struct is copied verbatim into the session
+// binary handed back to Erlang, so its layout IS the persistence format:
+// reordering, resizing or adding a field is a blob-format break. The three
+// leading fields tag the blob so a stale one is rejected with
+// `invalid_session` instead of being reinterpreted as live key material.
+// Bump DR_STATE_VERSION on any layout change. The blob is not encrypted and
+// not authenticated -- see docs/SECURITY.md.
 typedef struct {
+    uint32_t magic;    // DR_STATE_MAGIC
+    uint16_t version;  // DR_STATE_VERSION
+    uint16_t size;     // sizeof(double_ratchet_state_t), guards ABI drift
+
     // Root chain key (32 bytes)
     unsigned char root_key[32];
 
@@ -54,13 +72,20 @@ typedef struct {
     unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
     unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
 
-    // DR-HE (header encryption) keys. HKs/HKr encrypt the current chain's
-    // headers (AES-256-CBC under HKDF(hk, "WhisperHeader"); no header MAC);
-    // NHKs/NHKr are pre-derived for the *next* DH ratchet step and rotate
-    // into HKs/HKr at that step. Both NHKs and NHKr are seeded from the same
-    // 32 bytes of the X3DH output at dr_init (see docs/SECURITY.md, "Known
-    // deviations"). Zero until the first rotation; hk_is_nonzero() filters
-    // the never-seeded HKr on Alice's side.
+    // Local identity pub in Ed25519 (signing) form. Only used to populate the
+    // PreKeySignalMessage `identity_key` field so Bob can feed it straight
+    // into process_pre_key_bundle_bob/5 and dr_init/5, both of which need
+    // the Ed25519 form: X25519 -> Ed25519 is not uniquely invertible, so a
+    // PKSM carrying the X25519 form leaves Bob unable to bootstrap.
+    unsigned char local_identity_pub_ed[crypto_sign_PUBLICKEYBYTES];
+
+    // DR-HE (header encryption) keys. HKs/HKr protect the current chain's
+    // headers (AES-256-CBC + HMAC tag, both keys from HKDF(hk,
+    // "WhisperHeader")); NHKs/NHKr are pre-derived for the *next* DH ratchet
+    // step and rotate into HKs/HKr at that step. Seeded at dr_init from the
+    // two trailing 32-byte halves of the X3DH output, assigned mirror-wise by
+    // role so each direction has its own key. Zero until the first rotation;
+    // hk_is_nonzero() filters the never-seeded HKr on Alice's side.
     unsigned char header_key_send[DR_HEADER_KEY_SIZE];
     unsigned char header_key_recv[DR_HEADER_KEY_SIZE];
     unsigned char next_header_key_send[DR_HEADER_KEY_SIZE];
@@ -85,6 +110,11 @@ typedef struct {
 } double_ratchet_state_t;
 
 #define DR_STATE_SIZE sizeof(double_ratchet_state_t)
+#define DR_STATE_MAGIC 0x44525331u  // "DRS1"
+#define DR_STATE_VERSION 1u
+// The `size` tag field is a uint16_t, so the layout guard silently aliases
+// two different structs once the state outgrows it.
+_Static_assert(DR_STATE_SIZE <= UINT16_MAX, "session blob size tag would truncate");
 
 
 ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);

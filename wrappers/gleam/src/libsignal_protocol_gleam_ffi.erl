@@ -1,63 +1,66 @@
-%% Adapter shims that bridge Gleam's `Option(Int)` encoding
-%% (`none` atom or `{some, N}` tuple) to the underlying NIF's idiomatic
-%% Erlang form (`undefined` atom or a bare integer).
+%% Adapter between the Erlang NIF and the Gleam wrapper's types.
 %%
-%% Used only by the Gleam wrapper; not part of the public NIF surface.
+%% Two jobs:
+%%   1. Errors. The NIF returns `{error, Atom}`, but Gleam's declared type is
+%%      `Result(_, String)`; an atom leaking through makes `Error("bad_mac")`
+%%      unmatchable and crashes any `string` function applied to it. Every
+%%      call goes through wrap/1, which converts the atom to a binary.
+%%   2. Option(Int). Gleam encodes `Option` as the `none` atom or a
+%%      `{some, N}` tuple; the NIF uses `undefined` or a bare integer.
+%%
+%% Every function the Gleam wrapper calls is listed here -- signal_protocol
+%% has no direct @external to libsignal_protocol_nif, so the conversion
+%% cannot be bypassed by accident.
 -module(libsignal_protocol_gleam_ffi).
 
--export([dr_encrypt_prekey/3, pksm_decode/1, process_pre_key_bundle_bob/5,
+-export([generate_identity_key_pair/0, generate_pre_key/1, generate_signed_pre_key/2,
+         process_pre_key_bundle/2, process_pre_key_bundle_bob/5,
+         dr_init/5, dr_encrypt/2, dr_decrypt/2,
+         dr_encrypt_prekey/3, pksm_decode/1,
          test_setup/0]).
 
-%% Make the parent project's compiled Erlang modules + NIF priv dir
-%% available to gleeunit. The Gleam test runner spins up a fresh BEAM that
-%% knows nothing about the libsignal_protocol_nif app, so we add it to the
-%% code path here and force-load the NIF stub modules. Callers should
-%% invoke this once from their top-level test main before gleeunit.main().
-test_setup() ->
-    %% Locate the project root by walking up from the running test's CWD
-    %% until we hit a directory containing `_build/default/lib/...`.
-    Root = find_project_root(filename:absname(".")),
-    EbinDir = filename:join([Root, "_build", "default", "lib",
-                             "libsignal_protocol_nif", "ebin"]),
-    case filelib:is_dir(EbinDir) of
-        true ->
-            code:add_pathz(EbinDir),
-            {module, libsignal_protocol_nif} =
-                code:ensure_loaded(libsignal_protocol_nif),
-            {module, signal_nif} = code:ensure_loaded(signal_nif),
-            ok;
-        false ->
-            erlang:error({libsignal_protocol_nif_ebin_missing, EbinDir,
-                          "run `make build` in the project root"})
-    end.
+%% {error, Atom} -> {error, Binary}. Everything else passes through.
+wrap({error, Reason}) when is_atom(Reason) ->
+    {error, atom_to_binary(Reason, utf8)};
+wrap(Other) ->
+    Other.
 
-find_project_root(Dir) ->
-    Candidate = filename:join([Dir, "_build", "default", "lib",
-                               "libsignal_protocol_nif"]),
-    case filelib:is_dir(Candidate) of
-        true ->
-            Dir;
-        false ->
-            Parent = filename:dirname(Dir),
-            case Parent of
-                Dir ->
-                    erlang:error(project_root_not_found);
-                _ ->
-                    find_project_root(Parent)
-            end
-    end.
+generate_identity_key_pair() ->
+    wrap(libsignal_protocol_nif:generate_identity_key_pair()).
+
+generate_pre_key(KeyId) ->
+    wrap(libsignal_protocol_nif:generate_pre_key(KeyId)).
+
+generate_signed_pre_key(IdentityPriv, KeyId) ->
+    wrap(libsignal_protocol_nif:generate_signed_pre_key(IdentityPriv, KeyId)).
+
+process_pre_key_bundle(LocalIdentityPriv, Bundle) ->
+    wrap(libsignal_protocol_nif:process_pre_key_bundle(LocalIdentityPriv, Bundle)).
+
+process_pre_key_bundle_bob(IdPriv, SpkPriv, OpkPriv, RemoteIdPub, RemoteEphPub) ->
+    wrap(libsignal_protocol_nif:process_pre_key_bundle_bob(
+             IdPriv, SpkPriv, OpkPriv, RemoteIdPub, RemoteEphPub)).
+
+dr_init(SharedSecret, LocalIdPub, RemoteIdPub, SelfIdPriv, IsAlice) ->
+    wrap(libsignal_protocol_nif:dr_init(
+             SharedSecret, LocalIdPub, RemoteIdPub, SelfIdPriv, IsAlice)).
+
+dr_encrypt(Session, Plaintext) ->
+    wrap(libsignal_protocol_nif:dr_encrypt(Session, Plaintext)).
+
+dr_decrypt(Session, Ciphertext) ->
+    wrap(libsignal_protocol_nif:dr_decrypt(Session, Ciphertext)).
 
 %% Encode side: convert Gleam's Option(Int) for the one-time-prekey id into
 %% the NIF's `Int | undefined` shape.
-dr_encrypt_prekey(Session, Plaintext,
-                  {RegId, OpkOpt, SpkId, BaseKey}) ->
+dr_encrypt_prekey(Session, Plaintext, {RegId, OpkOpt, SpkId, BaseKey}) ->
     OpkTerm =
         case OpkOpt of
             none -> undefined;
             {some, N} when is_integer(N) -> N
         end,
-    libsignal_protocol_nif:dr_encrypt_prekey(
-        Session, Plaintext, {RegId, OpkTerm, SpkId, BaseKey}).
+    wrap(libsignal_protocol_nif:dr_encrypt_prekey(
+             Session, Plaintext, {RegId, OpkTerm, SpkId, BaseKey})).
 
 %% Decode side: normalize the OPK id position in the NIF return into Gleam's
 %% Option(Int) encoding.
@@ -71,11 +74,57 @@ pksm_decode(Wire) ->
                 end,
             {ok, {RegId, BaseKey, IdKey, OpkOpt, SpkId, Inner}};
         Err ->
-            Err
+            wrap(Err)
     end.
 
-%% Pass-through. Exposed here so the Gleam wrapper has a stable single
-%% adapter module to FFI against.
-process_pre_key_bundle_bob(IdPriv, SpkPriv, OpkPriv, RemoteIdPub, RemoteEphPub) ->
-    libsignal_protocol_nif:process_pre_key_bundle_bob(
-        IdPriv, SpkPriv, OpkPriv, RemoteIdPub, RemoteEphPub).
+%% Point gleeunit at the working tree's NIF instead of the Hex-resolved
+%% copy of libsignal_protocol_nif that the dependency pulls in. Without
+%% this, `gleam test` in this repo would exercise the last published
+%% release rather than the code being changed.
+%%
+%% add_patha puts the local ebin ahead of the dependency's, and the two stub
+%% modules are purged first in case the dependency copy is already loaded.
+%% If there is no working tree (a consumer running these tests from a Hex
+%% checkout), this is a no-op and the dependency's copy is used.
+test_setup() ->
+    case local_ebin_dir() of
+        {ok, EbinDir} ->
+            code:add_patha(EbinDir),
+            lists:foreach(fun(M) ->
+                              code:purge(M),
+                              code:delete(M),
+                              code:purge(M),
+                              {module, M} = code:ensure_loaded(M)
+                          end,
+                          [libsignal_protocol_nif, signal_nif]),
+            ok;
+        error ->
+            ok
+    end.
+
+local_ebin_dir() ->
+    case find_project_root(filename:absname(".")) of
+        {ok, Root} ->
+            EbinDir = filename:join([Root, "_build", "default", "lib",
+                                     "libsignal_protocol_nif", "ebin"]),
+            case filelib:is_dir(EbinDir) of
+                true -> {ok, EbinDir};
+                false -> error
+            end;
+        error ->
+            error
+    end.
+
+find_project_root(Dir) ->
+    Candidate = filename:join([Dir, "_build", "default", "lib",
+                               "libsignal_protocol_nif"]),
+    case filelib:is_dir(Candidate) of
+        true ->
+            {ok, Dir};
+        false ->
+            Parent = filename:dirname(Dir),
+            case Parent of
+                Dir -> error;
+                _ -> find_project_root(Parent)
+            end
+    end.

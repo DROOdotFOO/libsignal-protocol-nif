@@ -9,14 +9,36 @@ defmodule SignalProtocol do
 
   @nif :libsignal_protocol_nif
 
+  @doc """
+  Optional probe that the NIF is loaded. libsodium is initialised when the
+  NIF library loads, so no per-VM setup call is required; this raises
+  `UndefinedFunctionError` if the NIF is missing and returns `:ok` otherwise.
+  """
+  @spec init() :: :ok
+  def init do
+    :code.ensure_loaded(@nif)
+    @nif.init()
+  end
+
   @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, term()}
   def generate_identity_key_pair, do: @nif.generate_identity_key_pair()
 
-  @spec generate_pre_key(non_neg_integer()) :: {:ok, {non_neg_integer(), binary()}} | {:error, term()}
+  @doc """
+  Generates an X25519 pre-key. Returns `{key_id, public, private}`; keep the
+  private half to run `process_pre_key_bundle_bob/5` against the published
+  pre-key.
+  """
+  @spec generate_pre_key(non_neg_integer()) ::
+          {:ok, {non_neg_integer(), binary(), binary()}} | {:error, atom()}
   def generate_pre_key(key_id) when is_integer(key_id), do: @nif.generate_pre_key(key_id)
 
+  @doc """
+  Generates an X25519 signed pre-key. Returns
+  `{key_id, public, private, signature}` -- the signature is Ed25519 over the
+  public key under `identity_key`.
+  """
   @spec generate_signed_pre_key(binary(), non_neg_integer()) ::
-          {:ok, {non_neg_integer(), binary(), binary()}} | {:error, term()}
+          {:ok, {non_neg_integer(), binary(), binary(), binary()}} | {:error, atom()}
   def generate_signed_pre_key(identity_key, key_id)
       when is_binary(identity_key) and is_integer(key_id) do
     @nif.generate_signed_pre_key(identity_key, key_id)
@@ -32,8 +54,8 @@ defmodule SignalProtocol do
   remote identity key.
 
   Returns `{:ok, {shared_secret(96), ephemeral_pub(32)}}` on success.
-  The 96-byte shared secret is `X3DH_SK(64) || DR_HE_seed(32)` and is fed
-  directly into `init_double_ratchet/5` as the Double Ratchet root seed.
+  The 96-byte shared secret is `root(32) || seed_a(32) || seed_b(32)` and is
+  fed directly into `init_double_ratchet/5`.
   """
   @spec process_pre_key_bundle(binary(), binary()) ::
           {:ok, {binary(), binary()}} | {:error, term()}
@@ -44,8 +66,8 @@ defmodule SignalProtocol do
 
   @doc """
   Bob's side of X3DH. Recovers the same 96-byte shared secret Alice derived
-  via `process_pre_key_bundle/2` (64B X3DH SK || 32B shared header-key seed
-  for DR-HE).
+  via `process_pre_key_bundle/2` (32B DR root key || two 32B per-direction
+  DR-HE header-key seeds).
 
   Inputs:
     * `identity_priv` - Bob's 64-byte Ed25519 identity private key.

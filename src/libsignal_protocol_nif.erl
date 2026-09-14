@@ -1,9 +1,8 @@
 -module(libsignal_protocol_nif).
 
 -export([init/0, generate_identity_key_pair/0, generate_pre_key/1,
-         generate_signed_pre_key/2, create_session/2, process_pre_key_bundle/2,
-         process_pre_key_bundle_bob/5, encrypt_message/2, decrypt_message/2, dr_init/5,
-         dr_encrypt/2, dr_encrypt_prekey/3, dr_decrypt/2, pksm_decode/1]).
+         generate_signed_pre_key/2, process_pre_key_bundle/2, process_pre_key_bundle_bob/5,
+         dr_init/5, dr_encrypt/2, dr_encrypt_prekey/3, dr_decrypt/2, pksm_decode/1]).
 
 -on_load load_nif/0.
 
@@ -28,21 +27,22 @@ init() ->
 generate_identity_key_pair() ->
     erlang:nif_error(nif_not_loaded).
 
+%% Both generators return the private half: Bob must keep it to run
+%% process_pre_key_bundle_bob/5 against the bundle he published.
 -spec generate_pre_key(KeyId :: non_neg_integer()) ->
-                          {ok, {non_neg_integer(), X25519Pub :: binary()}} | {error, atom()}.
+                          {ok, {non_neg_integer(), X25519Pub :: binary(), X25519Priv :: binary()}} |
+                          {error, atom()}.
 generate_pre_key(_KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
 -spec generate_signed_pre_key(IdentityPriv :: binary(), KeyId :: non_neg_integer()) ->
                                  {ok,
-                                  {non_neg_integer(), SpkPub :: binary(), Signature :: binary()}} |
+                                  {non_neg_integer(),
+                                   SpkPub :: binary(),
+                                   SpkPriv :: binary(),
+                                   Signature :: binary()}} |
                                  {error, atom()}.
 generate_signed_pre_key(_IdentityKey, _KeyId) ->
-    erlang:nif_error(nif_not_loaded).
-
--spec create_session(LocalPriv :: binary(), RemotePub :: binary()) ->
-                        {ok, Session :: binary()} | {error, atom()}.
-create_session(_LocalKey, _RemoteKey) ->
     erlang:nif_error(nif_not_loaded).
 
 -spec process_pre_key_bundle(LocalIdentityPriv :: binary(), Bundle :: binary()) ->
@@ -59,7 +59,7 @@ process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
 %% RemoteIdentityPub: 32B Ed25519 (Alice's identity pub).
 %% RemoteEphemeralPub: 32B X25519 (Alice's ephemeral, returned by her
 %%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 96B
-%%   secret Alice derived (64B X3DH SK || 32B shared header-key seed for DR-HE).
+%%   secret Alice derived (32B root key || two 32B DR-HE header-key seeds).
 -spec process_pre_key_bundle_bob(IdentityPriv :: binary(),
                                  SignedPreKeyPriv :: binary(),
                                  OneTimePreKeyPriv :: binary(),
@@ -71,16 +71,6 @@ process_pre_key_bundle_bob(_IdentityPriv,
                            _OneTimePreKeyPriv,
                            _RemoteIdentityPub,
                            _RemoteEphemeralPub) ->
-    erlang:nif_error(nif_not_loaded).
-
--spec encrypt_message(Session :: binary(), Message :: binary()) ->
-                         {ok, Encrypted :: binary()} | {error, atom()}.
-encrypt_message(_Session, _Message) ->
-    erlang:nif_error(nif_not_loaded).
-
--spec decrypt_message(Session :: binary(), Encrypted :: binary()) ->
-                         {ok, Plaintext :: binary()} | {error, atom()}.
-decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet functions.

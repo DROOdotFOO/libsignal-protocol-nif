@@ -157,6 +157,11 @@ int pksm_decode(const unsigned char *in, size_t in_len, pksm_t *out)
 
     if (!seen_reg || !seen_base || !seen_id || !seen_spk || !seen_msg)
         return -1;
+    // base_key is Alice's X3DH ephemeral pub and identity_key her Ed25519
+    // identity pub; both are fixed 32-byte keys and both are fed straight to
+    // process_pre_key_bundle_bob/5 and dr_init/5, which require that size.
+    if (out->base_key_len != 32 || out->identity_key_len != 32)
+        return -1;
     return 0;
 }
 

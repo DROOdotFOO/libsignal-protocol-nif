@@ -8,7 +8,8 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
 -export([reorder_two_messages/1, reorder_five_messages/1, reorder_across_dh_ratchet/1,
-         skip_bound_rejected/1, random_permutations_property/1]).
+         skip_bound_rejected/1, skip_budget_is_per_chain/1,
+         previous_receive_keys_survive_ratchet_skip/1, random_permutations_property/1]).
 
 -define(MAX_SKIP, 32).
 
@@ -17,6 +18,8 @@ all() ->
      reorder_five_messages,
      reorder_across_dh_ratchet,
      skip_bound_rejected,
+     skip_budget_is_per_chain,
+     previous_receive_keys_survive_ratchet_skip,
      random_permutations_property].
 
 init_per_suite(Config) ->
@@ -101,6 +104,66 @@ skip_bound_rejected(Config) ->
     {_AliceN, Items} = alice_sends(Alice0, ?MAX_SKIP + 2),
     {_LastMsg, LastCT} = lists:last(Items),
     {error, too_many_skipped} = libsignal_protocol_nif:dr_decrypt(Bob0, LastCT).
+
+%% MAX_SKIP is a per-chain bound (Signal spec), so one receive that crosses a
+%% DH ratchet may skip up to MAX_SKIP on the old chain *and* MAX_SKIP on the
+%% new one, and every key it banks must later drain. Charging both sides
+%% against a single shared budget would reject ordinary reorders: 29 skipped
+%% on the old chain plus 10 on the new is 39, over a 32 budget, while each
+%% chain is individually well inside the cap.
+skip_budget_is_per_chain(Config) ->
+    %% 29 skipped on the old chain + 10 on the new.
+    {Bob, OldTail, NewPrefix, {LastMsg, LastCT}} =
+        ratchet_with_skips(parties(Config), 30, 11),
+    {ok, {LastMsg, Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, LastCT),
+    _ = bob_receives(Bob1, shuffle(OldTail ++ NewPrefix)),
+
+    %% Both chains at exactly MAX_SKIP still decrypt and drain.
+    {BobB, OldTailB, NewPrefixB, {LastMsgB, LastCTB}} =
+        ratchet_with_skips(parties(Config), ?MAX_SKIP + 1, ?MAX_SKIP + 1),
+    {ok, {LastMsgB, BobB1}} = libsignal_protocol_nif:dr_decrypt(BobB, LastCTB),
+    _ = bob_receives(BobB1, shuffle(OldTailB ++ NewPrefixB)),
+
+    %% One past MAX_SKIP on the new chain is rejected.
+    {BobC, _, _, {_, OverCT}} = ratchet_with_skips(parties(Config), 2, ?MAX_SKIP + 2),
+    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobC, OverCT)),
+
+    %% One past MAX_SKIP on the old chain is rejected.
+    {BobD, _, _, {_, OverCT2}} = ratchet_with_skips(parties(Config), ?MAX_SKIP + 3, 2),
+    ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobD, OverCT2)).
+
+%% Keys cached by an earlier receive must survive a later receive that banks
+%% a full two-chain skip. MKSKIPPED is sized at 3 * MAX_SKIP so the worst
+%% single receive (2 * MAX_SKIP) still leaves a chain's worth resident.
+previous_receive_keys_survive_ratchet_skip(Config) ->
+    {Alice0, Bob0} = parties(Config),
+    %% Chain P: Alice sends 6, Bob receives only the last -> 5 keys cached.
+    {Alice1, PItems} = alice_sends(Alice0, 6),
+    {PEarly, [PLast]} = lists:split(5, PItems),
+    Bob1 = bob_receives(Bob0, [PLast]),
+    %% Bob replies so Alice ratchets; then a full-budget ratchet receive.
+    {ok, {ReplyCT, Bob2}} = libsignal_protocol_nif:dr_encrypt(Bob1, <<"r">>),
+    {ok, {<<"r">>, Alice2}} = libsignal_protocol_nif:dr_decrypt(Alice1, ReplyCT),
+    Half = ?MAX_SKIP div 2,
+    {Bob3, OldTail, NewPrefix, {LastMsg, LastCT}} =
+        ratchet_with_skips({Alice2, Bob2}, Half + 1, Half + 1),
+    {ok, {LastMsg, Bob4}} = libsignal_protocol_nif:dr_decrypt(Bob3, LastCT),
+    %% Everything -- including the 5 keys from chain P -- must still drain.
+    _ = bob_receives(Bob4, shuffle(PEarly ++ OldTail ++ NewPrefix)).
+
+%% Alice sends OldN on her current chain; Bob receives only the first. Bob
+%% replies, Alice ratchets and sends NewN on the new chain. Returns Bob's
+%% state before receiving any new-chain message, the OldN-1 unreceived
+%% old-chain items, the first NewN-1 new-chain items, and the last new-chain
+%% item (whose header claims PN=OldN, N=NewN-1).
+ratchet_with_skips({Alice0, Bob0}, OldN, NewN) ->
+    {Alice1, [First | OldTail]} = alice_sends(Alice0, OldN),
+    Bob1 = bob_receives(Bob0, [First]),
+    {ok, {ReplyCT, Bob2}} = libsignal_protocol_nif:dr_encrypt(Bob1, <<"reply">>),
+    {ok, {<<"reply">>, Alice2}} = libsignal_protocol_nif:dr_decrypt(Alice1, ReplyCT),
+    {_Alice3, NewItems} = alice_sends(Alice2, NewN),
+    {NewPrefix, [Last]} = lists:split(NewN - 1, NewItems),
+    {Bob2, OldTail, NewPrefix, Last}.
 
 %% ============================================================================
 %% Property: random permutations of up to MAX_SKIP messages all decrypt

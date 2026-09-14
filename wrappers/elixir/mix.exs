@@ -4,7 +4,7 @@ defmodule LibsignalProtocol.MixProject do
   def project do
     [
       app: :libsignal_protocol,
-      version: "0.2.0",
+      version: "0.3.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -56,6 +56,9 @@ defmodule LibsignalProtocol.MixProject do
 
   defp deps do
     [
+      # The Erlang NIF this wrapper is a facade over. Published from the same
+      # repo; its rebar3 post-compile hook fetches or builds priv/*.so.
+      {:libsignal_protocol_nif, "~> 0.3"},
       {:castore, "~> 1.0"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
@@ -64,7 +67,6 @@ defmodule LibsignalProtocol.MixProject do
     ]
   end
 
-  # NIF is expected to be built separately by CI
   defp aliases do
     [
       compile: ["compile"],

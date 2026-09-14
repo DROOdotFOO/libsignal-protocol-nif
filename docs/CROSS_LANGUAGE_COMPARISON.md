@@ -7,12 +7,12 @@ All three wrappers call the same C NIF. Crypto behavior is identical. Difference
 |                 | Erlang                                 | Elixir                                                               | Gleam                                        |
 | --------------- | -------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
 | Hex package     | `libsignal_protocol_nif`               | `libsignal_protocol`                                                 | `libsignal_protocol_gleam`                   |
-| Entry module(s) | `signal_nif`, `libsignal_protocol_nif` | `SignalProtocol`, `LibsignalProtocol`, `SignalProtocol.PreKeyBundle` | `signal_protocol`, `pre_key_bundle`, `utils` |
-| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)` as declared; see Errors  |
+| Entry module(s) | `signal_nif`, `libsignal_protocol_nif` | `SignalProtocol`, `SignalProtocol.PreKeyBundle`                      | `signal_protocol`                            |
+| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)`                          |
 | Test framework  | Common Test                            | ExUnit                                                               | gleeunit                                     |
 | Static analysis | Dialyzer                               | Dialyzer, Credo                                                      | Gleam compiler                               |
 
-The Elixir and Gleam wrappers expose the Signal Protocol surface (X3DH, Double Ratchet, PreKeySignalMessage) plus identity / pre-key generation. The simple ChaCha20-Poly1305 session API (`create_session/2`, `encrypt_message/2`, `decrypt_message/2`) is not exposed by the Gleam wrapper; Elixir still exposes `create_session/2` through `LibsignalProtocol` (slated for removal in 0.3). The real Signal flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`.
+Both wrappers expose the same surface as the NIF: identity / pre-key generation, X3DH, the Double Ratchet, and the PreKeySignalMessage envelope. The flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`. (The static-key ChaCha20-Poly1305 "simple session" API was removed in 0.3.)
 
 For the lower-level primitives (`sha256/1`, `aes_gcm_encrypt/5`, `sign_data/2`, etc.) call `:signal_nif` directly from Elixir or `@external` to `signal_nif` from Gleam -- there are no wrapper modules around those.
 
@@ -20,15 +20,15 @@ For the lower-level primitives (`sha256/1`, `aes_gcm_encrypt/5`, `sign_data/2`, 
 
 ```erlang
 {ok, {Pub, Priv}} = libsignal_protocol_nif:generate_identity_key_pair().
-{ok, {KeyId, PreKeyPub}} = libsignal_protocol_nif:generate_pre_key(1).
-{ok, {KeyId, SpkPub, Sig}} =
+{ok, {KeyId, PreKeyPub, PreKeyPriv}} = libsignal_protocol_nif:generate_pre_key(1).
+{ok, {KeyId, SpkPub, SpkPriv, Sig}} =
     libsignal_protocol_nif:generate_signed_pre_key(Priv, 2).
 ```
 
 ```elixir
 {:ok, {pub, priv}} = SignalProtocol.generate_identity_key_pair()
-{:ok, {key_id, pre_key_pub}} = SignalProtocol.generate_pre_key(1)
-{:ok, {key_id, spk_pub, sig}} =
+{:ok, {key_id, pre_key_pub, pre_key_priv}} = SignalProtocol.generate_pre_key(1)
+{:ok, {key_id, spk_pub, spk_priv, sig}} =
   SignalProtocol.generate_signed_pre_key(priv, 2)
 ```
 
@@ -39,7 +39,7 @@ let assert Ok(spk)      =
   signal_protocol.generate_signed_pre_key(identity.private_key, 2)
 ```
 
-The Gleam wrapper returns typed records (`IdentityKeyPair`, `PreKey`, `SignedPreKey`). Erlang and Elixir return raw tuples.
+Every generator hands back the private half; the responder needs the pre-key and signed-pre-key privates to complete X3DH. The Gleam wrapper returns typed records (`IdentityKeyPair`, `PreKey`, `SignedPreKey`); Erlang and Elixir return raw tuples.
 
 ## X3DH
 
@@ -50,19 +50,28 @@ The Gleam wrapper returns typed records (`IdentityKeyPair`, `PreKey`, `SignedPre
 ```
 
 ```elixir
-bundle = <<bob_pub::binary, spk_pub::binary, spk_sig::binary, opk_pub::binary>>
+{:ok, bundle} =
+  SignalProtocol.PreKeyBundle.encode(%SignalProtocol.PreKeyBundle{
+    identity_key: bob_pub,
+    signed_pre_key: spk_pub,
+    signature: spk_sig,
+    one_time_pre_key: opk_pub
+  })
+
 {:ok, {sk, alice_eph_pub}} =
   SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
 ```
 
 ```gleam
-// Build the 128/160-byte NIF bundle layout directly. `pre_key_bundle.create`
-// produces a different, wrapper-local layout that the NIF rejects with
-// `invalid_bundle_size`; do not feed it to process_pre_key_bundle.
-let bundle = <<bob_pub:bits, spk_pub:bits, spk_sig:bits, opk_pub:bits>>
+let bundle =
+  PreKeyBundle(bob_pub, spk_pub, spk_sig, Some(opk_pub))
 let assert Ok(#(sk, alice_eph_pub)) =
   signal_protocol.process_pre_key_bundle(alice_priv, bundle)
 ```
+
+Elixir and Gleam model the bundle as a struct/record and serialize it to the
+same 128/160-byte binary the NIF takes; Erlang callers build that binary
+themselves.
 
 ## Double Ratchet
 
@@ -108,7 +117,15 @@ case SignalProtocol.dr_decrypt_message(session, ct) do
 end
 ```
 
-The Gleam wrapper declares `Result(_, String)`, but most of its externals bind straight to the NIF and the value at runtime is the Erlang atom, not a `String` -- `Error("bad_mac")` will not match and `string.*` functions on the error will crash. Until 0.3 routes every call through the FFI with `atom_to_binary`, treat the error as opaque: match `Error(_)` and log it with `string.inspect`.
+```gleam
+case signal_protocol.dr_decrypt_message(session, ct) {
+  Ok(#(pt, s2)) -> ...
+  Error("bad_mac") -> ...
+  Error(reason) -> ...
+}
+```
+
+The Gleam wrapper routes every call through `libsignal_protocol_gleam_ffi`, which converts the NIF's error atom to a binary, so the declared `Result(_, String)` holds and string matching works. (Through 0.2 the externals bound straight to the NIF and the runtime value was an atom, so `Error("bad_mac")` never matched.)
 
 ## Picking a wrapper
 

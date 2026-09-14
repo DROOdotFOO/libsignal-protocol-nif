@@ -46,11 +46,16 @@ int pb_decode_varint(const unsigned char *in, size_t in_len,
     return -1;
 }
 
-size_t dr_serialize_header(unsigned char *out,
+// Returns bytes written, or 0 if `out_cap` is too small -- the bound is
+// checked before anything is written, so a future field addition fails
+// closed instead of overflowing the caller's buffer.
+size_t dr_serialize_header(unsigned char *out, size_t out_cap,
                            const unsigned char *ratchet_key,
                            size_t ratchet_key_len,
                            uint32_t counter,
                            uint32_t previous_counter) {
+    // 3 tags + 1 length varint (ratchet_key_len < 128) + 2 uint32 varints.
+    if (out_cap < 3 + 1 + ratchet_key_len + 10) return 0;
     size_t n = 0;
     out[n++] = 0x0A;  // (1 << 3) | 2: field 1, length-delimited
     n += pb_encode_varint(out + n, ratchet_key_len);

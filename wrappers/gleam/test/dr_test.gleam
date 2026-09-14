@@ -57,31 +57,27 @@ pub fn bidirectional_handshake_test() {
   should.equal(pt, <<"hi alice":utf8>>)
 }
 
-@external(erlang, "signal_nif", "generate_curve25519_keypair")
-fn generate_curve25519_keypair() -> Result(#(BitArray, BitArray), String)
-
-@external(erlang, "signal_nif", "sign_data")
-fn sign_data(seed: BitArray, message: BitArray) -> Result(BitArray, String)
-
 pub fn pksm_first_message_test() {
   // Full X3DH + PKSM + DR handshake end-to-end through the Gleam surface.
   let assert Ok(alice_keys) = signal_protocol.generate_identity_key_pair()
   let assert Ok(bob_keys) = signal_protocol.generate_identity_key_pair()
+  let assert Ok(spk) =
+    signal_protocol.generate_signed_pre_key(bob_keys.private_key, 1)
 
-  // Mint Bob's signed pre-key ourselves so we retain the private half.
-  let assert Ok(#(spk_pub, spk_priv)) = generate_curve25519_keypair()
-  let assert Ok(signature) = sign_data(bob_keys.private_key, spk_pub)
-
-  // PreKeyBundle's pre_key field is required by the type; with the no-OPK
-  // path under test we still supply it but it isn't fed into Bob X3DH.
   let bundle =
     PreKeyBundle(
-      registration_id: 0,
       identity_key: bob_keys.public_key,
-      pre_key: #(0, <<>>),
-      signed_pre_key: #(1, spk_pub, signature),
-      base_key: <<>>,
+      signed_pre_key: spk.public_key,
+      signature: spk.signature,
+      one_time_pre_key: None,
     )
+  // The wire form is exactly what the NIF consumes: 128 bytes, no OPK.
+  should.equal(bit_array.byte_size(signal_protocol.encode_bundle(bundle)), 128)
+  should.equal(
+    signal_protocol.decode_bundle(signal_protocol.encode_bundle(bundle)),
+    Ok(bundle),
+  )
+
   let assert Ok(#(alice_sk, alice_eph_pub)) =
     signal_protocol.process_pre_key_bundle(alice_keys.private_key, bundle)
 
@@ -111,13 +107,15 @@ pub fn pksm_first_message_test() {
   should.equal(pksm.one_time_pre_key_id, None)
   should.equal(pksm.base_key, alice_eph_pub)
 
+  // Bob bootstraps entirely from the envelope: pksm.identity_key is Alice's
+  // Ed25519 pub, pksm.base_key her X3DH ephemeral.
   let assert Ok(bob_sk) =
     signal_protocol.process_pre_key_bundle_bob(
       bob_keys.private_key,
-      spk_priv,
+      spk.private_key,
       <<>>,
-      alice_keys.public_key,
-      alice_eph_pub,
+      pksm.identity_key,
+      pksm.base_key,
     )
   should.equal(bob_sk, alice_sk)
 
@@ -125,7 +123,7 @@ pub fn pksm_first_message_test() {
     signal_protocol.init_double_ratchet(
       bob_sk,
       bob_keys.public_key,
-      alice_keys.public_key,
+      pksm.identity_key,
       bob_keys.private_key,
       Bob,
     )
@@ -133,7 +131,11 @@ pub fn pksm_first_message_test() {
   should.equal(pt, plaintext)
 }
 
+// The NIF returns {error, Atom}; the FFI must convert it so the declared
+// Result(_, String) is honest and Error("malformed_message") matches.
 pub fn pksm_decode_malformed_test() {
-  let result = signal_protocol.pksm_decode(<<0x22, 1, 2, 3>>)
-  should.be_error(result)
+  should.equal(
+    signal_protocol.pksm_decode(<<0x22, 1, 2, 3>>),
+    Error("malformed_message"),
+  )
 }

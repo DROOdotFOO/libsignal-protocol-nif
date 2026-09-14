@@ -7,18 +7,22 @@
 // Signal-spec MAC truncation: HMAC-SHA-256 output keeps only the first 8 bytes.
 #define DR_MAC_LEN 8
 
-// DR-HE enc_header wire layout: iv(16) || AES-256-CBC(inner header).
+// DR-HE enc_header wire layout: iv(16) || AES-256-CBC(inner header) || tag(16).
 // The inner header protobuf is tag(1)+len(1)+ratchet_key(32) + tag(1)+
 // varint(1..5) + tag(1)+varint(1..5) = 38..46 bytes; PKCS#7 pads every
 // length in that range to one 48-byte ciphertext, so enc_header is always
-// exactly 64 bytes. The receiver rejects any other length before decrypting
-// and the sender refuses to emit one, so a header-format change that breaks
-// this arithmetic fails loudly (static assert below) rather than desyncing.
+// exactly 80 bytes. The tag is HMAC-SHA-256(header_mac_key, iv || ct)
+// truncated to 16 bytes and is verified before any decryption, so a forged
+// header costs the receiver one HMAC per candidate key and nothing else.
+// The receiver rejects any other length before touching a key and the
+// sender refuses to emit one, so a header-format change that breaks this
+// arithmetic fails loudly (static assert below) rather than desyncing.
 #define DR_INNER_HEADER_MIN 38
 #define DR_INNER_HEADER_MAX 46
 #define DR_HEADER_IV_LEN 16
 #define DR_HEADER_CT_LEN 48
-#define DR_ENC_HEADER_LEN (DR_HEADER_IV_LEN + DR_HEADER_CT_LEN)
+#define DR_HEADER_TAG_LEN 16
+#define DR_ENC_HEADER_LEN (DR_HEADER_IV_LEN + DR_HEADER_CT_LEN + DR_HEADER_TAG_LEN)
 _Static_assert(DR_INNER_HEADER_MIN >= DR_HEADER_CT_LEN - 16 &&
                DR_INNER_HEADER_MAX < DR_HEADER_CT_LEN,
                "inner header must PKCS#7-pad to exactly DR_HEADER_CT_LEN bytes");
@@ -39,9 +43,13 @@ int dr_derive_message_keys(unsigned char *cipher_key,
                            unsigned char *iv,
                            const unsigned char *message_key);
 
-// DR-HE header cipher-key derivation (32B output, info="WhisperHeader").
-int dr_derive_header_cipher_key(unsigned char *cipher_key,
-                                const unsigned char *header_key);
+// Seal an inner header under header_key: out receives exactly
+// DR_ENC_HEADER_LEN bytes (`iv(16) || AES-256-CBC(ct) || tag(16)`) with a
+// fresh random IV. Returns 0 on success, -1 on KDF/cipher/MAC failure or if
+// the padded ciphertext is not DR_HEADER_CT_LEN (inner_len out of range).
+int dr_seal_header(unsigned char *out,
+                   const unsigned char *header_key,
+                   const unsigned char *inner, size_t inner_len);
 
 // AES-256-CBC encrypt with PKCS#7 padding via OpenSSL EVP.
 // out_buf must have capacity >= plaintext_len + 16.
@@ -50,15 +58,19 @@ int dr_aes_cbc_encrypt(unsigned char *out_buf, size_t *out_len,
                        const unsigned char *key, const unsigned char *iv);
 
 // AES-256-CBC decrypt + PKCS#7 unpad. Caller must have verified the MAC first.
+// out_buf must have capacity >= ciphertext_len + 16: EVP_DecryptUpdate may
+// emit up to inl bytes and EVP_DecryptFinal_ex up to one more block before
+// the padding is stripped.
 int dr_aes_cbc_decrypt(unsigned char *out_buf, size_t *out_len,
                        const unsigned char *ciphertext, size_t ciphertext_len,
                        const unsigned char *key, const unsigned char *iv);
 
-// Trial-decrypt enc_header (`iv(16) || aes_cbc_ciphertext`) under a candidate
-// header_key. Rejects enc_header_len != DR_ENC_HEADER_LEN and any ciphertext
-// larger than out_plain_cap before touching the cipher. On valid PKCS#7 unpad
-// AND successful inner-header protobuf parse, fills *out_msg and returns 0.
-// Returns -1 on any failure.
+// Trial-open enc_header under a candidate header_key. Rejects
+// enc_header_len != DR_ENC_HEADER_LEN and any ciphertext larger than
+// out_plain_cap, then verifies the header tag with sodium_memcmp *before*
+// running AES-CBC. On a valid tag, PKCS#7 unpad, and successful
+// inner-header protobuf parse, fills *out_msg and returns 0. Returns -1 on
+// any failure; a wrong key is indistinguishable from a forged header.
 int dr_try_decrypt_header(unsigned char *out_plain,
                           size_t out_plain_cap,
                           size_t *out_plain_len,

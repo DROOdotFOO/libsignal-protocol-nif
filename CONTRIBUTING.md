@@ -39,6 +39,25 @@ cd wrappers/elixir && mix test
 cd wrappers/gleam  && gleam test
 ```
 
+Both wrapper packages declare `libsignal_protocol_nif` as a Hex dependency, so
+their dependency resolution needs that version to be published. While a
+release is in flight (the NIF is published before the wrappers), point the
+requirement at the last published version locally to resolve, then restore it
+before committing. Either way the tests exercise the **working tree's** NIF:
+`test_helper.exs` and `libsignal_protocol_gleam_ffi:test_setup/0` put
+`_build/default/lib/libsignal_protocol_nif/ebin` ahead of the dependency copy
+on the code path.
+
+CI handles the same situation by asking Hex whether the version in `VERSION`
+exists and dropping the requirement for that run if it does not. The step
+turns itself off once the version publishes; a non-200/404 answer from Hex
+fails the job rather than guessing. Because that means the wrapper jobs never
+resolve the dependency for real, a separate `consumer-smoke` job runs on
+release publish: it builds a scratch project that depends only on the
+published wrapper, with no repo checkout on the code path, and calls into the
+NIF. That is the job that catches a missing or unresolvable dependency
+declaration -- keep it passing before announcing a release.
+
 ## Style
 
 - **C**: snake_case, `sodium_memzero` on sensitive buffers, return `{ok, ...} | {error, atom_reason}`. The CMake target list in `c_src/CMakeLists.txt` is the source of truth for what gets built.

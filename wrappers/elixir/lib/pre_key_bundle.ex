@@ -1,130 +1,94 @@
 defmodule SignalProtocol.PreKeyBundle do
   @moduledoc """
-  Handles the creation and processing of pre-key bundles for the Signal Protocol.
+  Serialization for the pre-key bundle a party publishes so others can start
+  sessions with them asynchronously.
 
-  Pre-key bundles are used to establish initial sessions between users
-  in an asynchronous manner.
+  The wire form is exactly what the NIF's `process_pre_key_bundle/2` consumes:
+
+      identity_pub(32) || signed_pre_key_pub(32) || signature(64) [|| one_time_pre_key_pub(32)]
+
+  128 bytes, or 160 with a one-time pre-key. `signature` is Ed25519 over
+  `signed_pre_key_pub` under the identity key -- produced by
+  `SignalProtocol.generate_signed_pre_key/2`.
+
+  Key ids and the registration id are *not* part of this binary: they travel
+  in the PreKeySignalMessage of the first message, where the responder needs
+  them to look up which private keys to use.
   """
+
+  @key 32
+  @sig 64
+
+  @type t :: %__MODULE__{
+          identity_key: binary(),
+          signed_pre_key: binary(),
+          signature: binary(),
+          one_time_pre_key: binary() | nil
+        }
+
+  defstruct [:identity_key, :signed_pre_key, :signature, one_time_pre_key: nil]
 
   @doc """
-  Creates a new pre-key bundle with the given components.
+  Serializes a bundle to the NIF wire form.
 
-  ## Parameters
-    * `registration_id` - The registration ID of the user
-    * `identity_key` - The user's identity key
-    * `pre_key` - A pre-key tuple `{key_id, public_key}`
-    * `signed_pre_key` - A signed pre-key tuple `{key_id, public_key, signature}`
-    * `base_key` - The base key for the X3DH key agreement
-
-  Returns `{:ok, bundle}` on success, where `bundle` is a binary containing
-  the serialized pre-key bundle.
+  Returns `{:error, :invalid_key_size}` if any component is the wrong length,
+  rather than emitting a binary the NIF would reject with
+  `:invalid_bundle_size` or a signature failure.
   """
-  def create(registration_id, identity_key, pre_key, signed_pre_key, base_key)
-      when is_integer(registration_id) and
-             is_binary(identity_key) and
-             tuple_size(pre_key) == 2 and
-             tuple_size(signed_pre_key) == 3 and
-             is_binary(base_key) do
-    {pre_key_id, pre_key_public} = pre_key
-    {signed_pre_key_id, signed_pre_key_public, signed_pre_key_signature} = signed_pre_key
-
-    # Calculate bundle size for validation (internal use only)
-    # version
-    # registration_id
-    # pre_key_id
-    # signed_pre_key_id
-    _bundle_size =
-      1 +
-        4 +
-        4 +
-        4 +
-        byte_size(identity_key) +
-        byte_size(pre_key_public) +
-        byte_size(signed_pre_key_public) +
-        byte_size(signed_pre_key_signature) +
-        byte_size(base_key)
-
-    # Create bundle
-    bundle =
-      :binary.bin_to_list(<<
-        # version
-        1::8,
-        # registration_id
-        registration_id::32,
-        # pre_key_id
-        pre_key_id::32,
-        # signed_pre_key_id
-        signed_pre_key_id::32,
-        # identity_key
-        identity_key::binary,
-        # pre_key_public
-        pre_key_public::binary,
-        # signed_pre_key_public
-        signed_pre_key_public::binary,
-        # signed_pre_key_signature
-        signed_pre_key_signature::binary,
-        # base_key
-        base_key::binary
-      >>)
-
-    {:ok, :binary.list_to_bin(bundle)}
+  @spec encode(t()) :: {:ok, binary()} | {:error, :invalid_key_size}
+  def encode(%__MODULE__{
+        identity_key: id_key,
+        signed_pre_key: spk,
+        signature: sig,
+        one_time_pre_key: opk
+      })
+      when byte_size(id_key) == @key and byte_size(spk) == @key and
+             byte_size(sig) == @sig and (is_nil(opk) or byte_size(opk) == @key) do
+    {:ok, <<id_key::binary, spk::binary, sig::binary, opk_bytes(opk)::binary>>}
   end
+
+  def encode(%__MODULE__{}), do: {:error, :invalid_key_size}
 
   @doc """
-  Parses a pre-key bundle from its binary representation.
-
-  Returns `{:ok, bundle}` on success, where `bundle` is a map containing
-  the bundle components.
+  Parses a bundle from its wire form. Accepts exactly 128 or 160 bytes.
   """
-  def parse(bundle) when is_binary(bundle) do
-    try do
-      <<
-        version::8,
-        registration_id::32,
-        pre_key_id::32,
-        signed_pre_key_id::32,
-        identity_key::binary-size(32),
-        pre_key_public::binary-size(32),
-        signed_pre_key_public::binary-size(32),
-        signed_pre_key_signature::binary-size(64),
-        base_key::binary-size(32)
-      >> = bundle
-
-      {:ok,
-       %{
-         version: version,
-         registration_id: registration_id,
-         pre_key_id: pre_key_id,
-         signed_pre_key_id: signed_pre_key_id,
-         identity_key: identity_key,
-         pre_key_public: pre_key_public,
-         signed_pre_key_public: signed_pre_key_public,
-         signed_pre_key_signature: signed_pre_key_signature,
-         base_key: base_key
-       }}
-    rescue
-      _ -> {:error, :invalid_bundle}
-    end
+  @spec decode(binary()) :: {:ok, t()} | {:error, :invalid_bundle_size}
+  def decode(<<id_key::binary-size(@key), spk::binary-size(@key), sig::binary-size(@sig)>>) do
+    {:ok, %__MODULE__{identity_key: id_key, signed_pre_key: spk, signature: sig}}
   end
+
+  def decode(<<id_key::binary-size(@key), spk::binary-size(@key), sig::binary-size(@sig),
+               opk::binary-size(@key)>>) do
+    {:ok,
+     %__MODULE__{
+       identity_key: id_key,
+       signed_pre_key: spk,
+       signature: sig,
+       one_time_pre_key: opk
+     }}
+  end
+
+  def decode(bundle) when is_binary(bundle), do: {:error, :invalid_bundle_size}
 
   @doc """
-  Verifies the signature of a pre-key bundle.
+  Verifies the bundle's Ed25519 signature over its signed pre-key, under the
+  identity key the bundle itself carries. Returns `:ok` or the bare atom
+  `:invalid_signature`, mirroring `signal_nif:verify_signature/3`.
 
-  Returns `:ok` if the signature is valid, `{:error, reason}` otherwise.
+  This is the same check `process_pre_key_bundle/2` performs, exposed for
+  callers who want to validate a bundle before using it. It proves internal
+  consistency only: trust in `identity_key` has to come from out-of-band
+  identity verification.
   """
-  def verify_signature(bundle) when is_binary(bundle) do
-    case parse(bundle) do
-      {:ok, %{signed_pre_key_public: _public_key, signed_pre_key_signature: signature}} ->
-        # In a real implementation, this would verify the signature using the identity key
-        # For this example, we'll just check that the signature is the correct length
-        if byte_size(signature) == 64 do
-          :ok
-        else
-          {:error, :invalid_signature}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  @spec verify_signature(t()) :: :ok | :invalid_signature | {:error, atom()}
+  def verify_signature(%__MODULE__{
+        identity_key: id_key,
+        signed_pre_key: spk,
+        signature: sig
+      }) do
+    :signal_nif.verify_signature(id_key, spk, sig)
   end
+
+  defp opk_bytes(nil), do: <<>>
+  defp opk_bytes(opk), do: opk
 end

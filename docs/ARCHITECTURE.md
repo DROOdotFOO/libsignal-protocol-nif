@@ -10,7 +10,7 @@ For build steps and the file tree, see [CLAUDE.md](../CLAUDE.md). For the call-l
 Erlang / Elixir / Gleam application
             |
    *.erl NIF stub modules                src/{signal_nif,libsignal_protocol_nif}.erl
-            |  on_load: search priv/, _build/.../priv/
+            |  on_load: libsignal_nif_loader -> code:priv_dir/1, then priv/
    C NIF entry + dispatch                c_src/{signal_nif,libsignal_protocol_nif}.c
             |
    protocol pieces                       c_src/{dr,dr_chain,dr_crypto,dr_proto,pksm,
@@ -19,9 +19,9 @@ Erlang / Elixir / Gleam application
    libsodium  (+ OpenSSL EVP for AES-CBC)
 ```
 
-Two NIFs ship because they have different audiences. `signal_nif` is stateless crypto -- callable from anywhere, no init. `libsignal_protocol_nif` is the full Signal Protocol module: identity keys, X3DH, the Double Ratchet, the PreKeySignalMessage envelope, plus a simple ChaCha20-Poly1305 session API for callers who already have a static shared key.
+Two NIFs ship because they have different audiences. `signal_nif` is stateless crypto -- callable from anywhere, no init. `libsignal_protocol_nif` is the full Signal Protocol module: identity keys, X3DH, the Double Ratchet, and the PreKeySignalMessage envelope.
 
-The `.erl` stubs use `-on_load(load_nif/0)` with a fallback path list. A failed load fails closed: the calling process gets `UndefinedFunctionError` rather than a silently-stubbed module.
+Both `.erl` stubs use `-on_load(load_nif/0)` and delegate path resolution to `src/libsignal_nif_loader.erl`. A failed load fails closed: the module refuses to load and the calling process gets `UndefinedFunctionError` rather than silently-stubbed crypto.
 
 ## Protocol surface
 
@@ -35,37 +35,37 @@ Pre-keys are X25519. Signed pre-keys are signed under the identity key. The publ
 id_pub(32) || spk_pub(32) || signature(64) [|| opk_pub(32)]
 ```
 
-The wrappers serialize a higher-level versioned bundle for storage. The NIF only sees this raw form.
+Both generators hand back the private half; the publisher keeps it to complete X3DH when someone consumes the bundle. The Elixir and Gleam wrappers model the bundle as a struct/record and serialize it to exactly these bytes -- there is no second, wrapper-level format.
 
 ### X3DH
 
 Standard Signal X3DH with one variation: the KDF uses `info="X3DH-Signal"` rather than Signal's `"WhisperText"`. Structure of the HKDF call is identical, only the info bytes differ.
 
-The output widened in 0.2 from 64 to 96 bytes. The first 64 are the X3DH SK (bit-identical to the old output -- the new bytes come from extending HKDF-Expand by one block). The trailing 32 are a shared header-key seed for DR-HE.
+The output widened in 0.2 from 64 to 96 bytes and is laid out as `root(32) || seed_a(32) || seed_b(32)`. The first 32 bytes seed the DR root key; the two trailing seeds become the initial next-header-keys, assigned mirror-wise by role so Alice's sending header key equals Bob's receiving one and vice versa (Signal's `shared_hka` / `shared_nhkb`).
 
 Bob's side reconstructs the same 96 bytes from his stored privs plus values from Alice's first message. `x3dh_dr_compose_SUITE` asserts the two halves match by computing Bob's X3DH in plain Erlang via `crypto:compute_key(ecdh, _, _, x25519)`.
 
 ### Double Ratchet with header encryption
 
-The DR session struct (`double_ratchet_state_t` in `dr.h`) carries the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 32-slot MKSKIPPED LRU cache. Serialized blob is roughly 2.6 KB.
+The DR session struct (`double_ratchet_state_t` in `dr.h`) carries an 8-byte `magic || version || size` tag, the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, the local identity pub in Ed25519 form for the PKSM envelope, and a 96-slot MKSKIPPED LRU cache. Serialized blob is roughly 7.6 KB. The struct layout *is* the persistence format; `dr_state_load`/`dr_state_store` in `dr.c` are the only places it crosses the NIF boundary, and load validates the tag and normalises every `bool` byte before anything reads them.
 
 Wire envelope:
 
 ```
 version_byte(0x33)
-  || protobuf { enc_header=1: bytes(iv16 || AES-256-CBC(header_key, header_pb)),
+  || protobuf { enc_header=1: bytes(iv(16) || AES-256-CBC(hk_cipher, header_pb) || tag(16)),
                 ciphertext=2: bytes(AES-256-CBC(message_key, plaintext)) }
   || mac(8)
 ```
 
-- `header_key` comes from the DR state (`header_key_send` / `header_key_recv`, rotated from the pre-derived `next_*` at each DH step). Both directions are currently seeded from the same 32 bytes of the X3DH output -- see `SECURITY.md`, "Known deviations".
-- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }` (38..46 bytes, always padded to 48). Encrypting it hides those fields from on-path observers. The header IV is 16 random bytes shipped in the clear; the header itself carries no MAC.
+- `header_key` comes from the DR state (`header_key_send` / `header_key_recv`, rotated from the pre-derived `next_*` at each DH step). `HKDF(header_key, info="WhisperHeader", L=64)` yields `hk_cipher(32) || hk_mac(32)`.
+- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }` (38..46 bytes, always padded to 48). Encrypting it hides those fields from on-path observers. The header IV is 16 random bytes shipped in the clear; `tag = HMAC-SHA-256(hk_mac, iv || ct)[0..16)`.
 - `message_key -> HKDF(info="WhisperMessageKeys", L=80) -> cipher_key(32) || mac_key(32) || iv(16)`. The body IV is HKDF-derived, not random.
-- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified with `sodium_memcmp` before the *body* is AES-CBC decrypted, closing the padding-oracle channel on the body.
+- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified with `sodium_memcmp` before the body is AES-CBC decrypted.
 
-Receive first pins `enc_header` to exactly 64 bytes and the body to a non-zero multiple of 16, then trial-decrypts `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key. PKCS#7 unpad + strict inner protobuf parse is the success oracle, and it runs *before* the outer MAC (the header has no MAC of its own). MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is no longer available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
+Receive first pins `enc_header` to exactly 80 bytes and the body to a non-zero multiple of 16, then trial-opens `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key: the header tag is verified in constant time and only a header that authenticates is CBC-decrypted and parsed. MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is not available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
 
-`MAX_SKIP = 32` per receive bounds DOS. Anything beyond returns `too_many_skipped`.
+`MAX_SKIP = 32` bounds each chain (Signal spec), so a receive that crosses a DH ratchet may skip up to 32 on the old chain and 32 on the new one; anything beyond returns `too_many_skipped`. MKSKIPPED holds `3 * MAX_SKIP` entries, one budget above that worst case, so a full two-chain receive still leaves a chain's worth of earlier keys resident.
 
 ### PreKeySignalMessage envelope
 
@@ -77,7 +77,7 @@ version_byte(0x33)
                 pre_key_id=4 (optional), signed_pre_key_id=5, message=6 }
 ```
 
-`identity_key` is in X25519 (DJB) form. The DR MAC scope already uses X25519 identity pubs (converted at `dr_init`), so the envelope is wire-spec compatible with libsignal. `pre_key_id` is optional -- absent means no OPK was consumed.
+`identity_key` is Alice's Ed25519 identity pub, the form `process_pre_key_bundle_bob/5` and `dr_init/5` both take, so Bob can bootstrap from the envelope alone. (Through 0.2 it was sent in X25519 (DJB) form, matching libsignal's wire spec, but X25519 -> Ed25519 is not uniquely invertible so the field was unusable here; the DR MAC scope still uses the X25519 forms internally.) Both `identity_key` and `base_key` are rejected unless exactly 32 bytes. `pre_key_id` is optional -- absent means no OPK was consumed.
 
 The `message` field carries the full inner DR `SignalMessage` (version byte + outer protobuf + MAC). `dr_encrypt_prekey/3` and `dr_encrypt/2` share the same `dr_encrypt_core` helper for the cipher + MAC + envelope path.
 
@@ -85,11 +85,11 @@ The `message` field carries the full inner DR `SignalMessage` (version byte + ou
 
 **NIF, not port driver.** Signal's keygen and AEAD ops are small and frequent. The synchronous in-process call beats message-passing latency. Cost: a C-side crash takes the VM down, so each entry validates its inputs.
 
-**libsodium + OpenSSL 3.** libsodium covers Curve25519, Ed25519, ChaCha20-Poly1305, SHA-2, HKDF, HMAC. AES-256-CBC for the DR cipher comes from OpenSSL's `EVP_CIPHER` -- libsodium has no CBC. AES-256-GCM in `signal_nif` is libsodium's `crypto_aead_aes256gcm_*`. The OpenSSL dep showed up in 0.2 with the move to Signal-spec DR AEAD.
+**libsodium + OpenSSL 3.** libsodium covers Curve25519, Ed25519, SHA-2, HKDF, HMAC. AES-256-CBC for the DR cipher comes from OpenSSL's `EVP_CIPHER` -- libsodium has no CBC. AES-256-GCM in `signal_nif` is libsodium's `crypto_aead_aes256gcm_*`. The OpenSSL dep showed up in 0.2 with the move to Signal-spec DR AEAD.
 
 **Atom error vocabulary.** Every NIF returns `{ok, _} | {error, atom}`. Atoms are stable, cheap to pattern-match, and the Elixir wrapper mirrors them verbatim. The Gleam wrapper surfaces them as `Result(_, String)` because Gleam errors are strings.
 
-**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they are loaded independently (the Elixir wrapper never loads `signal_nif`), so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
+**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they load independently, so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
 
 **Fail closed on load.** A failed `load_nif/0` returns `{error, _}` from `-on_load` so the module refuses to load. Prior to 0.2 a load failure printed a warning and returned `ok`, leaving stubs in place that would silently no-op cryptographic work. Removed.
 

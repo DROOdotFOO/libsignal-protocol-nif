@@ -7,8 +7,9 @@
 // Finish the X3DH key derivation: SK = HKDF(salt=zeros, IKM=F||KM,
 // info="X3DH-Signal", L=96). F is 32 bytes of 0xFF (Signal X25519 spec).
 // km is DH1||DH2||DH3 (96B) or DH1||DH2||DH3||DH4 (128B).
-// Slot map: [0..64) = SK (root seed for dr_init), [64..96) = shared header
-// key seed for DR-HE. Returns 0 on success.
+// Slot map: [0..32) = DR root key, [32..64) = header-key seed A,
+// [64..96) = header-key seed B (see dr_init for the per-role assignment).
+// Returns 0 on success.
 static int x3dh_derive_sk(const unsigned char *km, size_t km_size,
                           unsigned char sk_out[96])
 {
@@ -23,49 +24,6 @@ static int x3dh_derive_sk(const unsigned char *km, size_t km_size,
                          (const unsigned char *)"X3DH-Signal", 11);
     sodium_memzero(hkdf_input, sizeof(hkdf_input));
     return rc;
-}
-
-// Create session (two argument version) - perform key agreement
-ERL_NIF_TERM create_session_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    if (argc != 2) {
-        return enif_make_badarg(env);
-    }
-    
-    ErlNifBinary local_key, remote_key;
-    if (!enif_inspect_binary(env, argv[0], &local_key) || 
-        !enif_inspect_binary(env, argv[1], &remote_key)) {
-        return enif_make_badarg(env);
-    }
-    
-    // Validate key sizes
-    if (local_key.size != crypto_box_SECRETKEYBYTES || 
-        remote_key.size != crypto_box_PUBLICKEYBYTES) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_key_sizes"));
-    }
-    
-    // Create session state with shared secret
-    ERL_NIF_TERM session_term;
-    unsigned char *session_data = enif_make_new_binary(env, 64, &session_term);
-    
-    // Perform raw X25519 key agreement (Signal spec: no HSalsa20 post-mix).
-    unsigned char shared_secret[crypto_scalarmult_BYTES];
-    if (crypto_scalarmult(shared_secret, local_key.data, remote_key.data) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "key_agreement_failed"));
-    }
-    
-    // Derive session key from shared secret
-    crypto_generichash(session_data, 32, shared_secret, sizeof(shared_secret), NULL, 0);
-    
-    // Add some randomness for the rest of the session state
-    randombytes_buf(session_data + 32, 32);
-    
-    // Clear sensitive data
-    sodium_memzero(shared_secret, sizeof(shared_secret));
-    
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), session_term);
 }
 
 // Process pre-key bundle - Full X3DH Key Agreement Protocol Implementation
@@ -92,7 +50,13 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     //   ed_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)
     //   ++ [one_time_prekey_pub(32)]
     size_t min_bundle_size = 32 + 32 + crypto_sign_BYTES;  // 128
-    if (bundle.size < min_bundle_size) {
+    // Exactly 128 (no OPK) or 160 (with one). Inferring OPK presence from
+    // "at least 160" would let a trailing-byte-padded bundle through, and
+    // accepting 129..159 would silently drop bytes. Note the signature only
+    // covers the SPK: an active attacker can still *remove* the OPK to force
+    // the 3-DH path, which is why OPK presence must be pinned out of band
+    // (see docs/SECURITY.md).
+    if (bundle.size != min_bundle_size && bundle.size != min_bundle_size + 32) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "invalid_bundle_size"));
     }
@@ -101,7 +65,7 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     unsigned char *signed_prekey = bundle.data + 32;
     unsigned char *signature = bundle.data + 64;
     unsigned char *one_time_prekey = NULL;
-    bool has_one_time_prekey = (bundle.size >= min_bundle_size + 32);
+    bool has_one_time_prekey = (bundle.size == min_bundle_size + 32);
     if (has_one_time_prekey) {
         one_time_prekey = bundle.data + min_bundle_size;
     }
@@ -179,7 +143,8 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
         err = "kdf_failed"; goto cleanup;
     }
 
-    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
+    // SessionKey is 96B: [0..32)=DR root key, [32..64)=header-key seed A,
+    // [64..96)=header-key seed B. dr_init assigns the two seeds by role.
     {
         unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
         unsigned char *ephemeral_pub_data = enif_make_new_binary(env, 32, &ephemeral_pub_term);
@@ -218,8 +183,8 @@ cleanup:
 //   DH3 = DH(SPK_B_priv, EK_A_pub)     == DH(EK_A_priv, SPK_B_pub)
 //   DH4 = DH(OPK_B_priv, EK_A_pub)     == DH(EK_A_priv, OPK_B_pub)
 // KM = DH1||DH2||DH3[||DH4]; SK = X3DH KDF(KM). Returns {ok, SK(96B)},
-// where SK[0..64) is the X3DH root seed and SK[64..96) is the DR-HE shared
-// header key.
+// where SK[0..32) is the DR root key and SK[32..96) are the two per-direction
+// DR-HE header-key seeds.
 ERL_NIF_TERM process_pre_key_bundle_bob(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 5) {
@@ -304,7 +269,8 @@ ERL_NIF_TERM process_pre_key_bundle_bob(ErlNifEnv *env, int argc, const ERL_NIF_
         err = "kdf_failed"; goto cleanup;
     }
 
-    // SessionKey is 96B: [0..64)=SK, [64..96)=shared header key for DR-HE.
+    // SessionKey is 96B: [0..32)=DR root key, [32..64)=header-key seed A,
+    // [64..96)=header-key seed B. dr_init assigns the two seeds by role.
     {
         unsigned char *session_data = enif_make_new_binary(env, 96, &session_term);
         memcpy(session_data, session_key, 96);
@@ -325,117 +291,3 @@ cleanup:
     }
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), session_term);
 }
-
-// Encrypt message using ChaCha20-Poly1305
-ERL_NIF_TERM encrypt_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    if (argc != 2) {
-        return enif_make_badarg(env);
-    }
-    
-    ErlNifBinary session, message;
-    
-    if (!enif_inspect_binary(env, argv[0], &session) ||
-        !enif_inspect_binary(env, argv[1], &message)) {
-        return enif_make_badarg(env);
-    }
-    
-    // Validate session size (should contain at least a 32-byte key)
-    if (session.size < 32) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_session"));
-    }
-    
-    // Use first 32 bytes of session as encryption key
-    unsigned char key[crypto_aead_chacha20poly1305_ietf_KEYBYTES];
-    memcpy(key, session.data, crypto_aead_chacha20poly1305_ietf_KEYBYTES);
-    
-    // Generate random nonce
-    unsigned char nonce[crypto_aead_chacha20poly1305_ietf_NPUBBYTES];
-    randombytes_buf(nonce, sizeof(nonce));
-    
-    // Calculate ciphertext size (plaintext + MAC + nonce)
-    size_t ciphertext_len = message.size + crypto_aead_chacha20poly1305_ietf_ABYTES;
-    size_t total_size = ciphertext_len + crypto_aead_chacha20poly1305_ietf_NPUBBYTES;
-    
-    ERL_NIF_TERM encrypted_term;
-    unsigned char *encrypted_data = enif_make_new_binary(env, total_size, &encrypted_term);
-    
-    // Store nonce at the beginning
-    memcpy(encrypted_data, nonce, crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
-    
-    // Encrypt the message
-    unsigned long long actual_ciphertext_len;
-    if (crypto_aead_chacha20poly1305_ietf_encrypt(
-            encrypted_data + crypto_aead_chacha20poly1305_ietf_NPUBBYTES,
-            &actual_ciphertext_len,
-            message.data, message.size,
-            NULL, 0,  // No additional data
-            NULL,     // No secret nonce
-            nonce, key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "encryption_failed"));
-    }
-    
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), encrypted_term);
-}
-
-// Decrypt message using ChaCha20-Poly1305
-ERL_NIF_TERM decrypt_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    if (argc != 2) {
-        return enif_make_badarg(env);
-    }
-    
-    ErlNifBinary session, encrypted;
-    
-    if (!enif_inspect_binary(env, argv[0], &session) ||
-        !enif_inspect_binary(env, argv[1], &encrypted)) {
-        return enif_make_badarg(env);
-    }
-    
-    // Validate session size (should contain at least a 32-byte key)
-    if (session.size < 32) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_session"));
-    }
-    
-    // Validate encrypted message size (nonce + ciphertext + MAC)
-    size_t min_size = crypto_aead_chacha20poly1305_ietf_NPUBBYTES + 
-                     crypto_aead_chacha20poly1305_ietf_ABYTES;
-    if (encrypted.size < min_size) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "invalid_message"));
-    }
-    
-    // Use first 32 bytes of session as decryption key
-    unsigned char key[crypto_aead_chacha20poly1305_ietf_KEYBYTES];
-    memcpy(key, session.data, crypto_aead_chacha20poly1305_ietf_KEYBYTES);
-    
-    // Extract nonce from the beginning of encrypted data
-    unsigned char nonce[crypto_aead_chacha20poly1305_ietf_NPUBBYTES];
-    memcpy(nonce, encrypted.data, crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
-    
-    // Calculate plaintext size
-    size_t ciphertext_len = encrypted.size - crypto_aead_chacha20poly1305_ietf_NPUBBYTES;
-    size_t plaintext_len = ciphertext_len - crypto_aead_chacha20poly1305_ietf_ABYTES;
-    
-    ERL_NIF_TERM decrypted_term;
-    unsigned char *decrypted_data = enif_make_new_binary(env, plaintext_len, &decrypted_term);
-    
-    // Decrypt the message
-    unsigned long long actual_plaintext_len;
-    if (crypto_aead_chacha20poly1305_ietf_decrypt(
-            decrypted_data, &actual_plaintext_len,
-            NULL,  // No secret nonce
-            encrypted.data + crypto_aead_chacha20poly1305_ietf_NPUBBYTES,
-            ciphertext_len,
-            NULL, 0,  // No additional data
-            nonce, key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
-                               enif_make_atom(env, "decryption_failed"));
-    }
-    
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), decrypted_term);
-}
-

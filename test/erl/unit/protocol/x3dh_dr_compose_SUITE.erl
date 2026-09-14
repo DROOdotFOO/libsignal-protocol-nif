@@ -41,21 +41,15 @@ end_per_suite(_Config) ->
 %% Build Bob's published bundle. Returns {Bundle, BobIdPub, BobIdPriv} so the
 %% test can also init Bob's DR side with the matching identity priv.
 build_bundle() ->
-    {ok, {BobIdPub, BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    %% Use the NIF's own helper to mint a properly-signed prekey.
-    {ok, {_KeyId, SpkPub, Signature}} =
-        libsignal_protocol_nif:generate_signed_pre_key(BobIdPriv, 1),
-    Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary>>,
+    {Bundle, BobIdPub, BobIdPriv, _SpkPub, _SpkPriv} = build_bundle_with_spk_priv(),
     {Bundle, BobIdPub, BobIdPriv}.
 
-%% Same as build_bundle/0 but also returns the SPK private key, so the test
-%% can reconstruct Bob's side of X3DH. The NIF's generate_signed_pre_key/2
-%% destroys the SPK priv, so we mint the SPK keypair ourselves and sign with
-%% signal_nif:sign_data/2.
+%% Same as build_bundle/0 but also returns the SPK keypair, so the test can
+%% reconstruct Bob's side of X3DH.
 build_bundle_with_spk_priv() ->
     {ok, {BobIdPub, BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    {ok, {SpkPub, SpkPriv}} = signal_nif:generate_curve25519_keypair(),
-    {ok, Signature} = signal_nif:sign_data(BobIdPriv, SpkPub),
+    {ok, {_KeyId, SpkPub, SpkPriv, Signature}} =
+        libsignal_protocol_nif:generate_signed_pre_key(BobIdPriv, 1),
     Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary>>,
     {Bundle, BobIdPub, BobIdPriv, SpkPub, SpkPriv}.
 

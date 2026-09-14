@@ -1,7 +1,7 @@
 {application,
  libsignal_protocol_nif,
  [{description, "Signal Protocol cryptographic primitives NIF implementation"},
-  {vsn, "0.2.0"},
+  {vsn, "0.3.0"},
   {registered, []},
   {applications, [kernel, stdlib]},
   {env, []},

@@ -24,7 +24,10 @@ void mkskipped_pop(double_ratchet_state_t *state, int index,
                    unsigned char *out_message_key);
 
 // Skip and store keys in the current recv chain up to `until` (exclusive).
-// Returns 0 on success, -1 if the skip exceeds MAX_SKIP.
+// Bounded by MAX_SKIP per chain, matching the Signal spec (a receive that
+// crosses a DH ratchet may therefore skip up to MAX_SKIP on the old chain
+// and MAX_SKIP on the new one). Returns 0 on success, -1 if the skip
+// exceeds MAX_SKIP; on -1 nothing is derived or stored.
 int skip_message_keys(double_ratchet_state_t *state,
                       unsigned int until);
 

@@ -17,16 +17,19 @@ libsignal_protocol_gleam = "~> 0.2"
 
 ## Modules
 
-- `signal_protocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage
-- `pre_key_bundle` -- `create`, `parse`, `verify_signature`, `to_binary`
-- `utils` -- `generate_user_keys`, `create_user_bundle` (convenience helpers)
+- `signal_protocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage, bundle encode/decode
+
+Every call goes through `libsignal_protocol_gleam_ffi`, which converts the
+NIF's error atoms to the `String` these functions declare, so
+`Error("bad_mac")` matches as written.
 
 ## Types
 
 ```gleam
 pub type IdentityKeyPair { IdentityKeyPair(public_key: BitArray, private_key: BitArray) }
-pub type PreKey          { PreKey(key_id: Int, public_key: BitArray) }
-pub type SignedPreKey    { SignedPreKey(key_id: Int, public_key: BitArray, signature: BitArray) }
+pub type PreKey          { PreKey(key_id: Int, public_key: BitArray, private_key: BitArray) }
+pub type SignedPreKey    { SignedPreKey(key_id: Int, public_key: BitArray, private_key: BitArray, signature: BitArray) }
+pub type PreKeyBundle    { PreKeyBundle(identity_key: BitArray, signed_pre_key: BitArray, signature: BitArray, one_time_pre_key: Option(BitArray)) }
 pub type DrSession       { DrSession(state: BitArray) }
 pub type DrRole          { Alice | Bob }
 ```
@@ -34,26 +37,27 @@ pub type DrRole          { Alice | Bob }
 ## Quick start
 
 ```gleam
-import gleam/option
-import pre_key_bundle
-import signal_protocol
+import gleam/option.{None, Some}
+import signal_protocol.{PreKeyBundle}
 
 let assert Ok(alice) = signal_protocol.generate_identity_key_pair()
 let assert Ok(bob)   = signal_protocol.generate_identity_key_pair()
 let assert Ok(opk)   = signal_protocol.generate_pre_key(1)
 let assert Ok(spk)   = signal_protocol.generate_signed_pre_key(bob.private_key, 2)
+// Keep opk.private_key and spk.private_key: process_pre_key_bundle_bob needs them.
 ```
 
-X3DH. `process_pre_key_bundle` takes a typed `PreKeyBundle`; the wrapper serializes it to the format the NIF expects:
+X3DH. `process_pre_key_bundle` takes the typed bundle and serializes it to
+the NIF layout (`encode_bundle` / `decode_bundle` expose that binary
+directly: 128 bytes, or 160 with a one-time pre-key):
 
 ```gleam
-let assert Ok(bundle) =
-  pre_key_bundle.create(
-    registration_id: 1,
+let bundle =
+  PreKeyBundle(
     identity_key: bob.public_key,
-    pre_key: opk,
-    signed_pre_key: spk,
-    base_key: <<0>>,
+    signed_pre_key: spk.public_key,
+    signature: spk.signature,
+    one_time_pre_key: Some(opk.public_key),
   )
 
 let assert Ok(#(shared_secret, alice_eph_pub)) =

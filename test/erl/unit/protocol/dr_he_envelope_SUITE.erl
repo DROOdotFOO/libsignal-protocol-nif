@@ -1,30 +1,38 @@
 -module(dr_he_envelope_SUITE).
 
-%% Pins the DR-HE wire-format observable: the counter, previous_counter, and
-%% ratchet_key are no longer visible on the wire because the inner header
+%% Pins the DR-HE wire-format observables: counter, previous_counter and
+%% ratchet_key are not visible on the wire, because the inner header
 %% protobuf is encrypted under header_key_send before being placed in the
-%% outer envelope.
+%% outer envelope; and a header must authenticate under a candidate header
+%% key before any of it is decrypted or parsed.
 %%
-%% The existing reorder + roundtrip + PKSM suites already prove the
-%% encrypt/decrypt loop still composes correctly (so trial-decrypt + MAC
-%% verify are functionally sound). This suite locks the actual traffic-
-%% analysis property that motivated DR-HE.
+%% The reorder, roundtrip and PKSM suites cover the encrypt/decrypt loop
+%% composing correctly. This suite covers the traffic-analysis property
+%% DR-HE exists for, and the receive path's structural rejections.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
 -export([wire_hides_counter/1, wire_hides_ratchet_key/1, tampered_envelope_rejected/1,
-         wrong_session_cannot_decrypt/1, malformed_outer_envelope_rejected/1,
-         wrong_size_enc_header_rejected/1]).
+         reflected_message_rejected/1, wrong_session_cannot_decrypt/1,
+         malformed_outer_envelope_rejected/1, wrong_size_enc_header_rejected/1,
+         forged_header_of_correct_length_rejected/1]).
+
+%% iv(16) || AES-CBC(48) || tag(16); mirrors DR_ENC_HEADER_LEN in dr_crypto.h.
+-define(ENC_HEADER_LEN, 80).
+%% Mirrors MAX_SKIP in dr.h.
+-define(MAX_SKIP, 32).
 
 all() ->
     [wire_hides_counter,
      wire_hides_ratchet_key,
      tampered_envelope_rejected,
+     reflected_message_rejected,
      wrong_session_cannot_decrypt,
      malformed_outer_envelope_rejected,
-     wrong_size_enc_header_rejected].
+     wrong_size_enc_header_rejected,
+     forged_header_of_correct_length_rejected].
 
 init_per_suite(Config) ->
     dr_test_helpers:nif_or_skip(Config, {2, 3, 5}).
@@ -78,25 +86,45 @@ wire_hides_ratchet_key(Config) ->
     {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice0, Plain),
     {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt(Alice1, Plain),
     Common = longest_common_substring(CT0, CT1),
-    %% Pre-DR-HE the cleartext ratchet_key alone was a 32B common substring.
-    %% With DR-HE the only structurally-invariant bytes between two
-    %% consecutive messages are the outer protobuf framing tags +
-    %% length varints -- well under 32 bytes.
+    %% The only structurally-invariant bytes between two consecutive
+    %% messages are the outer protobuf framing tags + length varints --
+    %% well under 32 bytes. A cleartext ratchet_key would show up here as
+    %% a 32-byte common substring.
     ?assert(byte_size(Common) < 32).
 
-%% Flip one bit in the enc_header region. The wire still parses (it's just
-%% bytes), the candidate header_keys still trial-decrypt (CBC produces some
-%% output), but the resulting inner protobuf fails the parse / field-count
-%% check and the message is rejected before any MAC computation runs.
+%% Flip every bit of the 80-byte enc_header in turn. The header carries its
+%% own 16-byte HMAC tag, so every flip -- IV, ciphertext, or tag -- must fail
+%% the tag check under each candidate header key and surface as bad_mac.
+%% Nothing else is acceptable: too_many_skipped or dh_ratchet_failed would
+%% mean an unauthenticated header reached the ratchet, and any crash means
+%% the CBC path ran on forged bytes.
 tampered_envelope_rejected(Config) ->
     {Alice0, Bob0} = parties(Config),
     {ok, {CT, _A1}} = libsignal_protocol_nif:dr_encrypt(Alice0, <<"original">>),
-    %% Outer protobuf starts at byte 1. Field 1 tag is 0x0A at byte 1,
-    %% then a varint length, then the enc_header bytes. Tamper at byte ~5
-    %% which is inside enc_header.
-    Tampered = flip_bit(CT, 5),
-    Result = libsignal_protocol_nif:dr_decrypt(Bob0, Tampered),
-    ?assertMatch({error, _}, Result).
+    %% Wire: 0x33, 0x0A, varint(80) = <<80>>, then the 80 header bytes.
+    <<16#33, 16#0A, ?ENC_HEADER_LEN, _/binary>> = CT,
+    HeaderStart = 3,
+    Outcomes =
+        lists:usort([libsignal_protocol_nif:dr_decrypt(Bob0, flip_bit(CT, Pos, Bit))
+                     || Pos <- lists:seq(HeaderStart, HeaderStart + ?ENC_HEADER_LEN - 1),
+                        Bit <- lists:seq(0, 7)]),
+    ?assertEqual([{error, bad_mac}], Outcomes).
+
+%% A message must never authenticate under its own sender's receive keys.
+%% Header keys are seeded per direction from distinct halves of the X3DH
+%% output, so reflecting Alice's wire back to Alice finds no candidate header
+%% key and stops at bad_mac -- without running the DH ratchet or skipping any
+%% message keys, which would be unauthenticated work driven by the reflection.
+reflected_message_rejected(Config) ->
+    Alice0 = ?config(alice, Config),
+    {AliceN, CT} =
+        lists:foldl(fun(_, {A, _}) ->
+                       {ok, {C, A1}} = libsignal_protocol_nif:dr_encrypt(A, <<"x">>),
+                       {A1, C}
+                    end,
+                    {Alice0, <<>>},
+                    lists:seq(1, ?MAX_SKIP + 2)),
+    ?assertEqual({error, bad_mac}, libsignal_protocol_nif:dr_decrypt(AliceN, CT)).
 
 %% A session belonging to an unrelated pair cannot decrypt: every candidate
 %% header_key (HKr, NHKr, MKSKIPPED entries) is unrelated, so trial-decrypt
@@ -119,12 +147,12 @@ malformed_outer_envelope_rejected(Config) ->
     Bogus = <<16#33, 0:64>>,
     ?assertMatch({error, malformed_message}, libsignal_protocol_nif:dr_decrypt(Bob, Bogus)).
 
-%% A legitimate enc_header is always iv(16) || 48B of AES-CBC output = 64B.
-%% The receiver trial-decrypts enc_header into a fixed-size stack buffer
+%% A legitimate enc_header is always iv(16) || AES-CBC(48) || tag(16) = 80B.
+%% The receiver trial-opens enc_header into a fixed-size stack buffer
 %% *before* the outer MAC is checked, so any other length must be rejected
-%% structurally -- including sizes the old `>= 32 && % 16 == 0` check let
-%% through (48, 80, ...) and sizes it rejected for the wrong reason (0, 16,
-%% 47, 63, 65). Pre-fix, the 4 KB case smashed the NIF stack.
+%% structurally: block-aligned sizes a `>= 32 && % 16 == 0` check would let
+%% through (48, 64, 96, and multi-KB values that overrun the buffer), and
+%% sizes such a check rejects only incidentally (0, 16, 47, 79, 81).
 wrong_size_enc_header_rejected(Config) ->
     Bob = ?config(bob, Config),
     lists:foreach(fun(HeaderLen) ->
@@ -133,7 +161,14 @@ wrong_size_enc_header_rejected(Config) ->
                                   libsignal_protocol_nif:dr_decrypt(Bob, Wire),
                                   {enc_header_len, HeaderLen})
                   end,
-                  [0, 16, 47, 48, 63, 65, 80, 112, 16 + 4096, 16 + 65536]).
+                  [0, 16, 47, 48, 63, 64, 65, 79, 81, 96, 112, 16 + 4096, 16 + 65536]).
+
+%% The right length with random contents must fail the header tag, not
+%% reach the cipher: bad_mac, never malformed_message or too_many_skipped.
+forged_header_of_correct_length_rejected(Config) ->
+    Bob = ?config(bob, Config),
+    ?assertEqual({error, bad_mac},
+                 libsignal_protocol_nif:dr_decrypt(Bob, forged_wire(?ENC_HEADER_LEN))).
 
 %% ============================================================================
 %% Helpers
@@ -142,9 +177,9 @@ wrong_size_enc_header_rejected(Config) ->
 parties(Config) ->
     {?config(alice, Config), ?config(bob, Config)}.
 
-flip_bit(Bin, Pos) when Pos < byte_size(Bin) ->
+flip_bit(Bin, Pos, Bit) when Pos < byte_size(Bin), Bit >= 0, Bit < 8 ->
     <<Pre:Pos/binary, Byte:8, Rest/binary>> = Bin,
-    <<Pre/binary, (Byte bxor 1):8, Rest/binary>>.
+    <<Pre/binary, (Byte bxor (1 bsl Bit)):8, Rest/binary>>.
 
 %% version(1) || protobuf{1: enc_header, 2: ciphertext} || mac(8) with an
 %% arbitrary enc_header length and a minimal 16B body ciphertext.

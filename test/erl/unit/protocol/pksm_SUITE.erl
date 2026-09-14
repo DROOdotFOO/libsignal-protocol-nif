@@ -20,13 +20,16 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([handshake_with_opk/1, handshake_without_opk/1, decode_malformed/1,
-         decode_truncated/1, bob_x3dh_matches_alice/1]).
+         decode_truncated/1, decode_rejects_bad_key_lengths/1, handshake_with_maximal_ids/1,
+         bob_x3dh_matches_alice/1]).
 
 all() ->
     [handshake_with_opk,
      handshake_without_opk,
      decode_malformed,
      decode_truncated,
+     decode_rejects_bad_key_lengths,
+     handshake_with_maximal_ids,
      bob_x3dh_matches_alice].
 
 init_per_suite(Config) ->
@@ -39,17 +42,16 @@ end_per_suite(_Config) ->
 %% Helpers
 %% ============================================================================
 
-%% Build Bob's keys and a published bundle. Returns everything the test
-%% needs to drive both sides of the handshake.
+%% Build Bob's keys and a published bundle using only the documented API:
+%% the pre-key generators now return their private halves, so no test-local
+%% key minting is needed.
 bob_prepare(WithOpk) ->
     {ok, {BobIdPub, BobIdPriv}} = libsignal_protocol_nif:generate_identity_key_pair(),
-    %% Mint the SPK keypair ourselves so we retain the SPK priv. The NIF's
-    %% generate_signed_pre_key/2 destroys the priv.
-    {ok, {SpkPub, SpkPriv}} = signal_nif:generate_curve25519_keypair(),
-    {ok, Signature} = signal_nif:sign_data(BobIdPriv, SpkPub),
+    {ok, {_SpkId, SpkPub, SpkPriv, Signature}} =
+        libsignal_protocol_nif:generate_signed_pre_key(BobIdPriv, 1),
     case WithOpk of
         true ->
-            {ok, {OpkPub, OpkPriv}} = signal_nif:generate_curve25519_keypair(),
+            {ok, {_OpkId, OpkPub, OpkPriv}} = libsignal_protocol_nif:generate_pre_key(2),
             Bundle = <<BobIdPub/binary, SpkPub/binary, Signature/binary, OpkPub/binary>>,
             #{bundle => Bundle,
               id_pub => BobIdPub,
@@ -97,24 +99,24 @@ handshake_through_pksm(WithOpk, RegId, SpkId, OpkIdOrUndef) ->
     ?assertEqual(SpkId, DecSpkId),
     ?assertEqual(OpkIdOrUndef, DecOpkId),
     ?assertEqual(AliceEphPub, BaseKey),
-    %% IdKey is Alice's X25519 identity pub (the X-form of her Ed25519 pub).
-    {ok, AliceIdPubX} = signal_nif:ed25519_pk_to_curve25519(AliceIdPub),
-    ?assertEqual(AliceIdPubX, IdKey),
+    %% IdKey is Alice's Ed25519 identity pub, exactly what Bob's X3DH and
+    %% dr_init need -- he bootstraps from the envelope alone, with no
+    %% out-of-band copy of Alice's identity key.
+    ?assertEqual(AliceIdPub, IdKey),
 
-    %% Bob derives SK via the new Bob-side X3DH NIF.
     {ok, BobSK} =
         libsignal_protocol_nif:process_pre_key_bundle_bob(
             maps:get(id_priv, Bob),
             maps:get(spk_priv, Bob),
             maps:get(opk_priv, Bob),
-            AliceIdPub,
-            AliceEphPub),
+            IdKey,
+            BaseKey),
     ?assertEqual(SK, BobSK),
 
     {ok, BobDr} =
         libsignal_protocol_nif:dr_init(BobSK,
                                        maps:get(id_pub, Bob),
-                                       AliceIdPub,
+                                       IdKey,
                                        maps:get(id_priv, Bob),
                                        0),
     {ok, {Decrypted, _BobDr2}} = libsignal_protocol_nif:dr_decrypt(BobDr, InnerMsg),
@@ -141,6 +143,58 @@ decode_truncated(_Config) ->
         libsignal_protocol_nif:dr_encrypt_prekey(Dr, <<"x">>, {1, undefined, 2, AliceEphPub}),
     Trunc = binary:part(Wire, 0, byte_size(Wire) - 1),
     ?assertEqual({error, malformed_message}, libsignal_protocol_nif:pksm_decode(Trunc)).
+
+%% base_key and identity_key feed straight into process_pre_key_bundle_bob/5
+%% and dr_init/5, which require exactly 32 bytes. A decoder that hands back
+%% a short or long key just moves the rejection downstream, so pksm_decode
+%% enforces the length itself.
+decode_rejects_bad_key_lengths(_Config) ->
+    Inner = <<"inner">>,
+    Good = 32,
+    lists:foreach(fun({BaseLen, IdLen}) ->
+                     Wire = forged_pksm(BaseLen, IdLen, Inner),
+                     ?assertEqual({error, malformed_message},
+                                  libsignal_protocol_nif:pksm_decode(Wire),
+                                  {BaseLen, IdLen})
+                  end,
+                  [{0, Good},
+                   {31, Good},
+                   {33, Good},
+                   {64, Good},
+                   {Good, 0},
+                   {Good, 31},
+                   {Good, 33},
+                   {Good, 64}]),
+    %% Control: the same builder with both keys at 32 bytes decodes.
+    ?assertMatch({ok, {7, _, _, undefined, 9, Inner}},
+                 libsignal_protocol_nif:pksm_decode(forged_pksm(Good, Good, Inner))).
+
+%% version(0x33) || protobuf{1:reg, 2:base_key, 3:identity_key, 5:spk_id,
+%% 6:message} with caller-chosen key lengths. All lengths here are < 128 so
+%% each varint is a single byte.
+forged_pksm(BaseLen, IdLen, Inner) ->
+    <<16#33,
+      16#08,
+      7,
+      16#12,
+      BaseLen,
+      (rand:bytes(BaseLen))/binary,
+      16#1A,
+      IdLen,
+      (rand:bytes(IdLen))/binary,
+      16#28,
+      9,
+      16#32,
+      (byte_size(Inner)),
+      Inner/binary>>.
+
+%% registration_id, pre_key_id and signed_pre_key_id are all uint32 on the
+%% wire, so each can need a 5-byte varint. The encode buffer must budget for
+%% that: sizing it for "typical" small ids makes Alice's very first message
+%% fail with pksm_encode_failed once a deployment's id space grows, which is
+%% a fail-closed but total handshake break. libsignal ids run to 2^24.
+handshake_with_maximal_ids(_Config) ->
+    handshake_through_pksm(true, 16#FFFFFFFF, 16#FFFFFF, 16#FFFFFF).
 
 bob_x3dh_matches_alice(_Config) ->
     %% Same SK on both sides without going through PKSM. Covers the OPK and

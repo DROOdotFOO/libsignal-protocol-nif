@@ -11,7 +11,7 @@
 //   PreKeySignalMessage {
 //       uint32 registration_id    = 1;   // varint
 //       bytes  base_key           = 2;   // Alice's X3DH ephemeral pub (32B)
-//       bytes  identity_key       = 3;   // Alice's X25519 identity pub (32B)
+//       bytes  identity_key       = 3;   // Alice's Ed25519 identity pub (32B)
 //       uint32 pre_key_id         = 4;   // optional one-time-prekey id
 //       uint32 signed_pre_key_id  = 5;
 //       bytes  message            = 6;   // serialized inner SignalMessage
@@ -32,6 +32,19 @@ typedef struct {
     const unsigned char *message;
     size_t message_len;
 } pksm_t;
+
+// Worst-case protobuf overhead on top of the inner message, i.e. the
+// smallest out_cap that always succeeds for 32-byte keys:
+//   6 field tags                                        =  6
+//   registration_id, pre_key_id, signed_pre_key_id      = 15  (5-byte varints)
+//   base_key len + identity_key len                     =  2
+//   base_key + identity_key                             = 64
+//   inner message length varint                         =  5
+// Every uint32 id can reach 2^32-1, so all three varints must be budgeted at
+// their maximum; under-sizing this shows up as {error, pksm_encode_failed}
+// for large key ids rather than as an overflow (pksm_encode bounds-checks
+// every write).
+#define PKSM_MAX_OVERHEAD 92
 
 // Serialize the protobuf body. Writes at most out_cap bytes to out and
 // returns the number written, or -1 on overflow. Pass has_pre_key_id=0 to

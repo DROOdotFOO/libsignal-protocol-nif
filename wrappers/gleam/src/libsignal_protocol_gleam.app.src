@@ -1,17 +1,14 @@
+%% Library only -- no `mod` entry: the wrapper is stateless, so there is
+%% nothing for an application callback or supervisor to own.
 {application, libsignal_protocol_gleam, [
     {description, "Gleam wrapper for Signal Protocol cryptographic primitives"},
-    {vsn, "0.2.0"},
+    {vsn, "0.3.0"},
     {registered, []},
-    {mod, {libsignal_protocol_gleam_app, []}},
     {applications, [
         kernel,
         stdlib
     ]},
     {env, []},
-    {modules, [
-        libsignal_protocol_gleam_app,
-        libsignal_protocol_gleam_sup
-    ]},
     {licenses, ["Apache-2.0"]},
     {links, [{"GitHub", "https://github.com/hydepwns/libsignal-protocol-nif"}]}
 ]}.

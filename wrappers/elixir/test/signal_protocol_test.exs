@@ -8,27 +8,31 @@ defmodule SignalProtocolTest do
     assert pub != priv
   end
 
-  test "generate_pre_key echoes the key_id with a 32-byte public key" do
+  test "generate_pre_key echoes the key_id with a 32-byte keypair" do
     key_id = :rand.uniform(1000)
-    assert {:ok, {^key_id, public_key}} = SignalProtocol.generate_pre_key(key_id)
+    assert {:ok, {^key_id, public_key, private_key}} = SignalProtocol.generate_pre_key(key_id)
     assert byte_size(public_key) == 32
+    assert byte_size(private_key) == 32
+    assert public_key != private_key
   end
 
-  test "generate_signed_pre_key returns key_id, 32B public, 64B Ed25519 signature" do
-    {:ok, {_pub, priv}} = SignalProtocol.generate_identity_key_pair()
+  test "generate_signed_pre_key returns key_id, keypair and 64B Ed25519 signature" do
+    {:ok, {pub, priv}} = SignalProtocol.generate_identity_key_pair()
     key_id = :rand.uniform(1000)
 
-    assert {:ok, {^key_id, public_key, signature}} =
+    assert {:ok, {^key_id, public_key, private_key, signature}} =
              SignalProtocol.generate_signed_pre_key(priv, key_id)
 
     assert byte_size(public_key) == 32
+    assert byte_size(private_key) == 32
     assert byte_size(signature) == 64
+    assert :ok == :signal_nif.verify_signature(pub, public_key, signature)
   end
 
   test "process_pre_key_bundle performs X3DH and returns {shared_secret, ephemeral_pub}" do
     {:ok, {_alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
     {:ok, {bob_id_pub, bob_id_priv}} = SignalProtocol.generate_identity_key_pair()
-    {:ok, {_key_id, spk_pub, signature}} =
+    {:ok, {_key_id, spk_pub, _spk_priv, signature}} =
       SignalProtocol.generate_signed_pre_key(bob_id_priv, 1)
     bundle = bob_id_pub <> spk_pub <> signature
 
@@ -36,6 +40,75 @@ defmodule SignalProtocolTest do
              SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
     assert byte_size(shared_secret) == 96
     assert byte_size(ephemeral_pub) == 32
+  end
+
+  describe "PreKeyBundle" do
+    alias SignalProtocol.PreKeyBundle
+
+    setup do
+      {:ok, {id_pub, id_priv}} = SignalProtocol.generate_identity_key_pair()
+      {:ok, {_spk_id, spk_pub, _spk_priv, sig}} =
+        SignalProtocol.generate_signed_pre_key(id_priv, 1)
+      {:ok, {_opk_id, opk_pub, _opk_priv}} = SignalProtocol.generate_pre_key(2)
+
+      %{
+        bundle: %PreKeyBundle{identity_key: id_pub, signed_pre_key: spk_pub, signature: sig},
+        opk_pub: opk_pub
+      }
+    end
+
+    test "encoded bundle is accepted by the NIF's X3DH", %{bundle: bundle} do
+      {:ok, {_alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
+      assert {:ok, wire} = PreKeyBundle.encode(bundle)
+      assert byte_size(wire) == 128
+
+      assert {:ok, {shared_secret, _eph}} =
+               SignalProtocol.process_pre_key_bundle(alice_priv, wire)
+
+      assert byte_size(shared_secret) == 96
+    end
+
+    test "one-time pre-key rides along and survives a round trip", ctx do
+      bundle = %{ctx.bundle | one_time_pre_key: ctx.opk_pub}
+      assert {:ok, wire} = PreKeyBundle.encode(bundle)
+      assert byte_size(wire) == 160
+      assert {:ok, ^bundle} = PreKeyBundle.decode(wire)
+    end
+
+    test "decode round-trips the no-OPK form", %{bundle: bundle} do
+      {:ok, wire} = PreKeyBundle.encode(bundle)
+      assert {:ok, ^bundle} = PreKeyBundle.decode(wire)
+    end
+
+    test "decode rejects any other length", %{bundle: bundle} do
+      {:ok, wire} = PreKeyBundle.encode(bundle)
+      oversize = wire <> :binary.copy(<<0>>, 33)
+
+      for bad <- [<<>>, binary_part(wire, 0, 127), wire <> <<0>>, oversize] do
+        assert {:error, :invalid_bundle_size} = PreKeyBundle.decode(bad)
+      end
+    end
+
+    test "encode rejects wrong-sized components", %{bundle: bundle} do
+      assert {:error, :invalid_key_size} =
+               PreKeyBundle.encode(%{bundle | identity_key: <<0::248>>})
+
+      assert {:error, :invalid_key_size} =
+               PreKeyBundle.encode(%{bundle | signature: <<0::504>>})
+
+      assert {:error, :invalid_key_size} =
+               PreKeyBundle.encode(%{bundle | one_time_pre_key: <<0::8>>})
+    end
+
+    test "verify_signature accepts a real bundle and rejects a swapped SPK", %{bundle: bundle} do
+      assert :ok == PreKeyBundle.verify_signature(bundle)
+
+      {:ok, {_id, other_spk, _priv}} = SignalProtocol.generate_pre_key(3)
+
+      # signal_nif:verify_signature/3 answers with bare atoms, not tuples.
+      assert :invalid_signature ==
+               PreKeyBundle.verify_signature(%{bundle | signed_pre_key: other_spk})
+    end
   end
 
   describe "Double Ratchet" do

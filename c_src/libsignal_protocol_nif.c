@@ -13,21 +13,22 @@ static ERL_NIF_TERM init_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
     return enif_make_atom(env, "ok");
 }
 
-// Define the NIF function array
+// Dispatch table. The DR message entry points do AES-CBC + HMAC over a
+// caller- or peer-supplied binary of unbounded size and copy the ~7.6 KB
+// session state twice, so they run on a dirty CPU scheduler rather than
+// risking a normal scheduler past its 1 ms budget. Everything else is
+// fixed-size elliptic-curve or hashing work that finishes well inside it.
 static ErlNifFunc nif_funcs[] = {
     {"init", 0, init_nif, 0},
     {"generate_identity_key_pair", 0, generate_identity_key_pair, 0},
     {"generate_pre_key", 1, generate_pre_key, 0},
     {"generate_signed_pre_key", 2, generate_signed_pre_key, 0},
-    {"create_session", 2, create_session_2, 0},
     {"process_pre_key_bundle", 2, process_pre_key_bundle, 0},
     {"process_pre_key_bundle_bob", 5, process_pre_key_bundle_bob, 0},
-    {"encrypt_message", 2, encrypt_message, 0},
-    {"decrypt_message", 2, decrypt_message, 0},
     {"dr_init", 5, dr_init, 0},
-    {"dr_encrypt", 2, dr_encrypt, 0},
-    {"dr_encrypt_prekey", 3, dr_encrypt_prekey, 0},
-    {"dr_decrypt", 2, dr_decrypt, 0},
+    {"dr_encrypt", 2, dr_encrypt, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"dr_encrypt_prekey", 3, dr_encrypt_prekey, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"dr_decrypt", 2, dr_decrypt, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"pksm_decode", 1, pksm_decode_nif, 0}
 };
 

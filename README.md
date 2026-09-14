@@ -14,7 +14,7 @@ Signal Protocol crypto for the BEAM. Erlang NIF, libsodium underneath, idiomatic
 ## What's implemented
 
 - Curve25519 ECDH, Ed25519 sign/verify
-- AES-256-GCM, ChaCha20-Poly1305 (AEAD)
+- AES-256-GCM (AEAD), AES-256-CBC + HMAC-SHA-256 (Signal DR cipher)
 - SHA-256, SHA-512, HMAC-SHA256, HKDF-SHA-256
 - X3DH key agreement (Alice + Bob sides)
 - Double Ratchet with header encryption (DR-HE)
@@ -39,27 +39,27 @@ Without Nix you need libsodium and CMake on the path:
 
 Toolchain: Erlang/OTP 26, Elixir 1.16, rebar 3.22. Exact versions pinned in `.tool-versions`.
 
-`make build` writes two shared libraries to `priv/`: `signal_nif.so` (lower-level crypto) and `libsignal_protocol_nif.so` (sessions, X3DH, Double Ratchet). BEAM loads `.so` on macOS as well; no `.dylib` is produced.
+`make build` writes two shared libraries to `priv/`: `signal_nif.so` (lower-level crypto) and `libsignal_protocol_nif.so` (X3DH, Double Ratchet, PreKeySignalMessage). BEAM loads `.so` on macOS as well; no `.dylib` is produced.
 
 ## Install
 
 Erlang (`rebar.config`):
 
 ```erlang
-{deps, [{libsignal_protocol_nif, "0.2.0"}]}.
+{deps, [{libsignal_protocol_nif, "0.3.0"}]}.
 ```
 
 Elixir (`mix.exs`):
 
 ```elixir
-{:libsignal_protocol, "~> 0.2"}
+{:libsignal_protocol, "~> 0.3"}
 ```
 
 Gleam (`gleam.toml`):
 
 ```toml
 [dependencies]
-libsignal_protocol_gleam = "~> 0.2"
+libsignal_protocol_gleam = "~> 0.3"
 ```
 
 The Hex package ships sources only. At consumer `rebar3 compile` time, `c_src/build_nif.sh` fetches a pre-built NIF tarball from the matching GitHub Release for the consumer's platform. Pre-built triplets:

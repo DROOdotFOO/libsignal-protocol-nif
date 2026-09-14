@@ -89,27 +89,66 @@ int dr_derive_message_keys(unsigned char *cipher_key,
     return 0;
 }
 
-// DR-HE header cipher-key derivation. The IV is NOT derived here: the same
-// header_key is reused across every message in a chain, so a deterministic
-// IV would reveal that two messages share a leading plaintext block (the
-// inner header's first 16 bytes are the ratchet_key prefix, invariant within
-// a chain). The Signal DR-HE spec explicitly requires the header AEAD to
-// avoid IV reuse under the same hk; we generate a fresh random IV per
-// encrypt and prepend it to enc_header. See `dr_encrypt_core`.
-//
-//   salt = 32 zero bytes
-//   info = "WhisperHeader"
-//   L    = 32  (cipher_key only)
-int dr_derive_header_cipher_key(unsigned char *cipher_key,
-                                const unsigned char *header_key) {
+// DR-HE header key derivation. One HKDF call yields the header cipher key
+// and the header MAC key (info="WhisperHeader", L=64). The IV is NOT
+// derived: the same header_key is reused across every message in a chain,
+// so a deterministic IV would reveal that two messages share a leading
+// plaintext block (the inner header's first 16 bytes are the ratchet_key
+// prefix, invariant within a chain). A fresh random IV is generated per
+// seal and shipped with the ciphertext.
+static int dr_derive_header_keys(unsigned char *cipher_key,
+                                 unsigned char *mac_key,
+                                 const unsigned char *header_key) {
     unsigned char salt[32] = {0};
-    if (hkdf_sha256(cipher_key, 32, salt, sizeof(salt),
+    unsigned char out[64];
+    if (hkdf_sha256(out, sizeof(out), salt, sizeof(salt),
                     header_key, DR_HEADER_KEY_SIZE,
                     (const unsigned char *)"WhisperHeader",
                     sizeof("WhisperHeader") - 1) != 0) {
+        sodium_memzero(out, sizeof(out));
         return -1;
     }
+    memcpy(cipher_key, out, 32);
+    memcpy(mac_key, out + 32, 32);
+    sodium_memzero(out, sizeof(out));
     return 0;
+}
+
+// tag = HMAC-SHA-256(mac_key, iv || ct)[0..DR_HEADER_TAG_LEN). `iv_and_ct`
+// is the first DR_HEADER_IV_LEN + DR_HEADER_CT_LEN bytes of an enc_header.
+static int dr_header_tag(unsigned char *out_tag,
+                         const unsigned char *mac_key,
+                         const unsigned char *iv_and_ct) {
+    unsigned char full[crypto_auth_hmacsha256_BYTES];
+    crypto_auth_hmacsha256_state st;
+    int ok = crypto_auth_hmacsha256_init(&st, mac_key, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, iv_and_ct,
+                                           DR_HEADER_IV_LEN + DR_HEADER_CT_LEN) == 0 &&
+             crypto_auth_hmacsha256_final(&st, full) == 0;
+    if (ok) memcpy(out_tag, full, DR_HEADER_TAG_LEN);
+    sodium_memzero(&st, sizeof(st));
+    sodium_memzero(full, sizeof(full));
+    return ok ? 0 : -1;
+}
+
+int dr_seal_header(unsigned char *out,
+                   const unsigned char *header_key,
+                   const unsigned char *inner, size_t inner_len) {
+    unsigned char hcipher[32], hmac[32];
+    size_t ct_len = 0;
+    int ok = 0;
+    if (inner_len < DR_INNER_HEADER_MIN || inner_len > DR_INNER_HEADER_MAX) return -1;
+    if (dr_derive_header_keys(hcipher, hmac, header_key) != 0) goto done;
+    randombytes_buf(out, DR_HEADER_IV_LEN);
+    if (dr_aes_cbc_encrypt(out + DR_HEADER_IV_LEN, &ct_len, inner, inner_len,
+                           hcipher, out) != 0) goto done;
+    if (ct_len != DR_HEADER_CT_LEN) goto done;
+    if (dr_header_tag(out + DR_HEADER_IV_LEN + DR_HEADER_CT_LEN, hmac, out) != 0) goto done;
+    ok = 1;
+done:
+    sodium_memzero(hcipher, sizeof(hcipher));
+    sodium_memzero(hmac, sizeof(hmac));
+    return ok ? 0 : -1;
 }
 
 // AES-256-CBC encrypt with PKCS#7 padding via OpenSSL EVP.
@@ -156,22 +195,19 @@ done:
     return ok ? 0 : -1;
 }
 
-// Trial-decrypt enc_header under a candidate header_key. enc_header on the
-// wire is `iv(16) || aes_cbc_ciphertext` -- the IV is generated freshly per
-// encrypt and shipped with the ciphertext so the same header_key can be
-// reused safely across every message in a chain.
+// Trial-open enc_header under a candidate header_key.
 //
 // enc_header_len is attacker-controlled (it comes straight out of the outer
-// envelope protobuf, before the MAC is checked), so it is pinned to the one
-// length a legitimate sender can produce and additionally bounded by the
-// caller's output capacity before any cipher call. EVP_DecryptUpdate writes
-// every block but the last regardless of key, so a size check after the
-// fact would be too late.
+// envelope protobuf, before the outer MAC is checked), so it is pinned to the
+// one length a legitimate sender can produce and additionally bounded by the
+// caller's output capacity before any cipher call. The header tag is then
+// verified in constant time; only a header that authenticates under this
+// key is CBC-decrypted, so a forged or wrong-key header costs one HKDF and
+// one HMAC and reveals nothing about padding or structure.
 //
-// On a valid PKCS#7 unpad AND a successful inner-header protobuf parse
+// On a valid tag, PKCS#7 unpad, and successful inner-header protobuf parse
 // (3 expected fields, 32B ratchet_key), fills *out and returns 0. Returns
-// -1 on size mismatch, AES-CBC failure, padding error, or malformed
-// inner protobuf.
+// -1 on any failure.
 int dr_try_decrypt_header(unsigned char *out_plain,
                           size_t out_plain_cap,
                           size_t *out_plain_len,
@@ -180,20 +216,23 @@ int dr_try_decrypt_header(unsigned char *out_plain,
                           size_t enc_header_len,
                           const unsigned char *header_key) {
     if (enc_header_len != DR_ENC_HEADER_LEN) return -1;
-    size_t ct_len = enc_header_len - DR_HEADER_IV_LEN;
-    if (ct_len + 16 > out_plain_cap) return -1;
+    if (DR_HEADER_CT_LEN + 16 > out_plain_cap) return -1;
     const unsigned char *iv = enc_header;
-    const unsigned char *ciphertext = enc_header + 16;
+    const unsigned char *ciphertext = enc_header + DR_HEADER_IV_LEN;
+    const unsigned char *tag = enc_header + DR_HEADER_IV_LEN + DR_HEADER_CT_LEN;
 
-    unsigned char hcipher[32];
-    if (dr_derive_header_cipher_key(hcipher, header_key) != 0) {
-        sodium_memzero(hcipher, sizeof(hcipher));
-        return -1;
-    }
+    unsigned char hcipher[32], hmac[32], expected[DR_HEADER_TAG_LEN];
     size_t pt_len = 0;
-    int rc = dr_aes_cbc_decrypt(out_plain, &pt_len, ciphertext, ct_len,
-                                hcipher, iv);
+    int rc = -1;
+    if (dr_derive_header_keys(hcipher, hmac, header_key) != 0) goto done;
+    if (dr_header_tag(expected, hmac, enc_header) != 0) goto done;
+    if (sodium_memcmp(expected, tag, DR_HEADER_TAG_LEN) != 0) goto done;
+    rc = dr_aes_cbc_decrypt(out_plain, &pt_len, ciphertext, DR_HEADER_CT_LEN,
+                            hcipher, iv);
+done:
     sodium_memzero(hcipher, sizeof(hcipher));
+    sodium_memzero(hmac, sizeof(hmac));
+    sodium_memzero(expected, sizeof(expected));
     if (rc != 0) return -1;
 
     // Reject false positives: the decrypted bytes must parse as the inner

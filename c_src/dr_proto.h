@@ -25,9 +25,9 @@ size_t pb_encode_varint(unsigned char *out, uint64_t value);
 int pb_decode_varint(const unsigned char *in, size_t in_len,
                      uint64_t *value, size_t *consumed);
 
-// Serialize DrMessage fields 1-3 only (the "header"). Returns bytes written.
-// `out` must have capacity >= 1+10 + ratchet_key_len + 1+10 + 1+10 (max 55).
-size_t dr_serialize_header(unsigned char *out,
+// Serialize DrMessage fields 1-3 only (the "header"). Returns bytes written
+// (38..46 for a 32-byte ratchet_key), or 0 if `out_cap` is insufficient.
+size_t dr_serialize_header(unsigned char *out, size_t out_cap,
                            const unsigned char *ratchet_key,
                            size_t ratchet_key_len,
                            uint32_t counter,
