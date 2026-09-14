@@ -77,9 +77,9 @@ log_info "New version: $NEW_VERSION"
 # Update version file
 echo "$NEW_VERSION" > "$VERSION_FILE"
 
-# Update version in rebar.config
-sed -i.bak "s/{vsn, \".*\"}/{vsn, \"$NEW_VERSION\"}/" rebar.config
-rm rebar.config.bak
+# Update the NIF application's version (also used by the Hex publisher).
+sed -i.bak "s/{vsn, \".*\"}/{vsn, \"$NEW_VERSION\"}/" src/libsignal_protocol_nif.app.src
+rm src/libsignal_protocol_nif.app.src.bak
 
 # Update version in Elixir wrapper
 sed -i.bak "s/version: \".*\"/version: \"$NEW_VERSION\"/" wrappers/elixir/mix.exs

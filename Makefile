@@ -4,7 +4,7 @@
 # targets so they can dlopen Homebrew's keg-only openssl@3 at run time.
 
 # Build targets
-.PHONY: all clean test test-unit test-clean deps install perf-test perf-quick perf-baseline docker-build docker-test release dev-setup dev-test help ci-build ci-test build-wrappers publish-wrappers hex-package
+.PHONY: all clean test test-unit test-clean deps install perf-test perf-quick perf-baseline docker-build docker-test release dev-setup dev-test help ci-build ci-test build-wrappers publish-wrappers hex-package hex-package-gleam
 
 # Default target
 all: build
@@ -51,7 +51,7 @@ ci-build: check-project-root $(BUILD_DIR)
 
 # Clean build artifacts. CMake currently runs in-tree (see `build` target), so
 # Cache + Makefile + CMakeFiles/ + cmake_install.cmake land in c_src/ alongside
-# the sources. Wipe them too so they don't leak into `rebar3 hex build` tarballs.
+# the sources. Remove them to reset the local build; Hex excludes them by allowlist.
 # Also wipe wrappers/*/priv/*.so to prevent stale NIFs from previous builds
 # masking NIF-API changes during local wrapper tests -- CI uses `cp -f` to
 # overwrite, but locally there's no auto-refresh so they go stale.
@@ -191,15 +191,14 @@ build-wrappers-nix:
 	nix-shell --run "cd wrappers/gleam && gleam build"
 	@echo "Wrapper packages built successfully!"
 
-# Build a clean Hex tarball for the main Erlang package. Builds NIFs first so
-# c_src/build_nif.sh's source-build branch doesn't kick in at rebar3 compile
-# time, then strips the in-tree cmake artifacts left by `make build` so the
-# tarball ships only sources -- not CMakeFiles/, CMakeCache.txt, etc.
-hex-package: clean build
-	@echo "Stripping in-tree cmake droppings before packaging..."
-	rm -rf c_src/CMakeFiles c_src/CMakeCache.txt c_src/cmake_install.cmake c_src/Makefile c_src/build
+# Package selection lives in src/libsignal_protocol_nif.app.src. Build first
+# so the hook uses this checkout; the allowlist excludes CMake output.
+hex-package: build
 	rebar3 hex build
-	@echo "Tarball: $$(ls _build/default/lib/libsignal_protocol_nif/hex/*.tar)"
+
+# Build the same Gleam artifact that `gleam publish` uploads, without publishing.
+hex-package-gleam:
+	cd wrappers/gleam && gleam export hex-tarball
 
 # Publish wrapper packages to Hex.pm
 publish-wrappers: build-wrappers
@@ -207,7 +206,7 @@ publish-wrappers: build-wrappers
 	@echo "Publishing Elixir wrapper..."
 	cd wrappers/elixir && mix hex.publish
 	@echo "Publishing Gleam wrapper..."
-	cd wrappers/gleam && rebar3 hex publish
+	cd wrappers/gleam && gleam publish
 	@echo "Wrapper packages published successfully!"
 
 # Release automation
@@ -274,6 +273,8 @@ help:
 	@echo "  ci-test            - Run CI tests"
 	@echo "  build-wrappers     - Build Elixir and Gleam wrapper packages"
 	@echo "  publish-wrappers   - Publish wrapper packages to Hex.pm"
+	@echo "  hex-package        - Build the source-only NIF Hex tarball"
+	@echo "  hex-package-gleam  - Export the Gleam Hex tarball without publishing"
 	@echo "  help               - Show this help message"
 
 # Diagnose and fix directory issues

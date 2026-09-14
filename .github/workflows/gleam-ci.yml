@@ -66,8 +66,6 @@ jobs:
     - name: Test Gleam wrapper
       run: |
         cd wrappers/gleam
-        mkdir -p priv
-        cp -f ../../priv/*.so priv/
         gleam deps download
         export ERL_LIBS="../../_build/default/lib:$ERL_LIBS"
         gleam test

@@ -3,6 +3,11 @@ version = "0.3.0"
 description = "Type-safe Gleam wrapper for Signal Protocol cryptographic primitives with libsodium. Provides strongly-typed APIs for key generation, digital signatures, encryption, and session management."
 licences = ["Apache-2.0"]
 
+[repository]
+type = "github"
+user = "DROOdotFOO"
+repo = "libsignal-protocol-nif"
+
 [dependencies]
 gleam_stdlib = "0.60.0"
 # The Erlang NIF this wrapper is a facade over. Published from the same repo;

@@ -254,6 +254,7 @@ jobs:
         otp-version: '26.2'
         elixir-version: '1.16.3'
         rebar3-version: '3.22.1'
+        gleam-version: '1.16.0'
         install-hex: true
         install-rebar: true
     
@@ -285,6 +286,13 @@ jobs:
         mix deps.get
         mix hex.publish --yes
 
+    - name: Publish Gleam package
+      env:
+        HEXPM_API_KEY: ${{ secrets.HEX_API_KEY }}
+      run: |
+        cd wrappers/gleam
+        gleam publish --yes
+
   consumer-smoke:
     name: Install from Hex as a consumer
     runs-on: ubuntu-latest
@@ -305,6 +313,7 @@ jobs:
         otp-version: '26.2'
         elixir-version: '1.16.3'
         rebar3-version: '3.22.1'
+        gleam-version: '1.16.0'
         install-hex: true
         install-rebar: true
 
@@ -342,6 +351,29 @@ jobs:
         IO.puts("consumer smoke ok")
         EOF
         mix run smoke.exs
+
+    - name: Resolve and exercise the published Gleam package
+      run: |
+        version="${GITHUB_REF_NAME#v}"
+        mkdir -p /tmp/gleam-consumer/src
+        cd /tmp/gleam-consumer
+        cat > gleam.toml <<EOF
+        name = "consumer"
+        version = "0.0.0"
+        [dependencies]
+        libsignal_protocol_gleam = "$version"
+        EOF
+        cat > src/consumer.gleam <<'EOF'
+        import signal_protocol
+
+        pub fn main() {
+          let assert Ok(identity) = signal_protocol.generate_identity_key_pair()
+          let assert Ok(_) =
+            signal_protocol.generate_signed_pre_key(identity.private_key, 1)
+          Nil
+        }
+        EOF
+        gleam run
 
   docker:
     name: Build and test Docker images
