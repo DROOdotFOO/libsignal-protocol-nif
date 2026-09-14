@@ -3,7 +3,7 @@
 #
 # Runs at consumer compile time via the post-compile hook in rebar.config.
 # Skips if the NIF binaries are already present. Otherwise:
-#   1. Detects the platform triplet via uname.
+#   1. Detects the platform triplet via uname and confirms glibc on Linux.
 #   2. Tries to download the matching pre-built tarball from this version's
 #      GitHub Release.
 #   3. Falls back to cmake + make in c_src/ if the download fails, the
@@ -49,6 +49,20 @@ case "${SYSTEM}-${MACHINE}" in
     Linux-arm64)    TRIPLET="aarch64-unknown-linux-gnu" ;;
     Linux-x86_64)   TRIPLET="x86_64-unknown-linux-gnu" ;;
 esac
+
+# GNU/Linux binaries cannot run on musl. An unavailable libc probe is also
+# inconclusive, so keep the source-build fallback rather than guessing.
+if [ "${SYSTEM}" = "Linux" ] && [ -n "${TRIPLET}" ]; then
+    if command -v getconf >/dev/null 2>&1 &&
+       LIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null)"; then
+        case "${LIBC}" in
+            "glibc "*) ;;
+            *) TRIPLET="" ;;
+        esac
+    else
+        TRIPLET=""
+    fi
+fi
 
 # NIFs emit .so on every platform we support (BEAM looks for .so on macOS too).
 EXT="so"

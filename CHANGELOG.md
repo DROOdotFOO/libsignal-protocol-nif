@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- NIF Hex packaging now reads its source-file allowlist from the application's `.app.src` metadata, as required by rebar3_hex. Includes `VERSION` so consumers can attempt the matching prebuilt download; excludes CMake caches and native build output without requiring a clean checkout. Release version updates now target the same application metadata.
+- Linux prebuilt selection now requires positive glibc detection. Alpine/musl and unavailable or unsupported libc probes fall back directly to source builds instead of attempting incompatible GNU/Linux binaries.
+- Gleam packaging and publishing now use `gleam export hex-tarball` / `gleam publish`, preserving the NIF dependency and generated Erlang modules. Removed the competing rebar3 configuration and hand-written application metadata. Release CI publishes the Gleam package and exercises it from a separate consumer project.
+
 ## [0.3.0] - 2026-09-14
 
 Security release. Closes a remotely reachable pre-authentication stack overflow in the Double Ratchet receive path (also fixed in 0.2.1), then authenticates the DR-HE header, separates header keys per direction, tags the session blob, and makes the documented API usable end to end -- the responder side could not previously be driven from the published functions at all.
