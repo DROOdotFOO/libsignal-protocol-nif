@@ -105,6 +105,10 @@ The publish sequence has multiple steps because the Hex tarball references binar
 
 To publish an existing release tag through CI, run `gh workflow run ci.yml --ref main -f tag=vX.Y.Z`. Validation and publishing check out that tag, not the current main branch; the consumer smoke tests resolve its version from Hex. Use this to recover a failed release publication without moving the tag. The publishing job uses `MIX_ENV=dev` so Elixir's documentation dependency is available.
 
+If a publication is partial, publish only the missing packages without replacing existing artifacts, then rerun the failed consumer job.
+
+For `v0.*` tags, CI explicitly answers Gleam's separate pre-1.0 acknowledgement. `gleam publish --yes` alone does not answer it and can exit successfully without publishing; always check that the release exists on Hex.
+
 ## Reporting bugs
 
 GitHub Issues. Include OS, Erlang/OTP version, the failing command, and the output. For security issues see [docs/SECURITY.md](docs/SECURITY.md) before filing publicly.

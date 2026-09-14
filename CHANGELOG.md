@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Hex release publishing now selects the repository explicitly so environment credentials are applied, publishes the NIF without requiring an unconfigured documentation provider, and uses the development environment for Elixir documentation. CI can publish an existing release tag without moving it, including the published-package consumer checks.
+- Gleam CI publishing explicitly acknowledges pre-1.0 releases for `v0.*` tags; `--yes` alone exits successfully without uploading those versions.
 
 ## [0.3.0] - 2026-09-14
 

@@ -310,7 +310,11 @@ jobs:
         HEXPM_API_KEY: ${{ secrets.HEX_API_KEY }}
       run: |
         cd wrappers/gleam
-        gleam publish --yes
+        # --yes does not answer Gleam's separate pre-1.0 acknowledgement.
+        case "$RELEASE_TAG" in
+          v0.*) printf '%s\n' 'I am not using semantic versioning' | gleam publish --yes ;;
+          *) gleam publish --yes ;;
+        esac
 
   consumer-smoke:
     name: Install from Hex as a consumer
