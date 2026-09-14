@@ -65,10 +65,10 @@ libsignal_protocol_gleam = "~> 0.3"
 The Hex package ships sources only. At consumer `rebar3 compile` time, `c_src/build_nif.sh` fetches a pre-built NIF tarball from the matching GitHub Release for the consumer's platform. Pre-built triplets:
 
 - `aarch64-apple-darwin` (macOS Apple Silicon)
-- `aarch64-unknown-linux-gnu` (Linux ARM64)
-- `x86_64-unknown-linux-gnu` (Linux x86_64)
+- `aarch64-unknown-linux-gnu` (Linux ARM64, glibc)
+- `x86_64-unknown-linux-gnu` (Linux x86_64, glibc)
 
-For any other platform (including Intel Mac), or when the download fails, the script falls back to a cmake source build. That requires libsodium + OpenSSL development headers + cmake on the system. Set `LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1` to skip the download attempt and go straight to the source path.
+Linux prebuilt downloads require `getconf GNU_LIBC_VERSION` to confirm glibc. On musl (including Alpine), or if the libc probe is unavailable or unsupported, the script goes directly to a cmake source build. Other platforms (including Intel Mac) and failed downloads also fall back to source. That requires libsodium + OpenSSL development headers + cmake on the system. Set `LIBSIGNAL_NIF_BUILD_FROM_SOURCE=1` to skip the download attempt and go straight to the source path.
 
 ## Erlang example
 
