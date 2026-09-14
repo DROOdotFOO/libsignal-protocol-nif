@@ -1,75 +1,46 @@
 ExUnit.start()
-
-# Configure test environment
 ExUnit.configure(exclude: [:skip], trace: true)
 
-# Make the parent project's compiled Erlang modules available so the NIF
-# stub modules (`libsignal_protocol_nif`, `signal_nif`) are loadable from
-# ExUnit. The wrapper has no compile-time dep on the parent OTP app; we
-# add it to the code path at runtime and trigger the on_load NIF init.
+# Point ExUnit at the working tree's NIF rather than the Hex-resolved copy
+# of :libsignal_protocol_nif that the dependency pulls in. Without this,
+# `mix test` in this repo would exercise the last published release instead
+# of the code being changed.
+#
+# add_patha puts the local ebin ahead of the dependency's, and the two stub
+# modules are purged first in case the dependency copy is already loaded.
+# If there is no working tree (a consumer running these tests from a Hex
+# checkout), this is a no-op and the dependency's copy is used.
 defmodule LibsignalProtocolTestSetup do
-  @parent_root Path.expand("../../..", __DIR__)
+  @local_ebin Path.expand("../../../_build/default/lib/libsignal_protocol_nif/ebin", __DIR__)
+  @nif_modules [:libsignal_protocol_nif, :signal_nif]
 
   def setup do
-    add_code_path(Path.join(@parent_root, "_build/default/lib/libsignal_protocol_nif/ebin"))
-
-    ensure_loaded(:libsignal_protocol_nif)
-    ensure_loaded(:signal_nif)
-  end
-
-  defp add_code_path(path) do
-    unless File.dir?(path) do
-      raise """
-      libsignal_protocol_nif ebin not found at #{path}.
-      Run `make build` in the project root before running wrapper tests.
-      """
+    if File.dir?(@local_ebin) do
+      :code.add_patha(String.to_charlist(@local_ebin))
+      Enum.each(@nif_modules, &reload/1)
     end
 
-    :code.add_pathz(String.to_charlist(path))
+    Enum.each(@nif_modules, &ensure_loaded!/1)
   end
 
-  defp ensure_loaded(mod) do
+  defp reload(mod) do
+    :code.purge(mod)
+    :code.delete(mod)
+    :code.purge(mod)
+  end
+
+  defp ensure_loaded!(mod) do
     case Code.ensure_loaded(mod) do
-      {:module, ^mod} -> :ok
-      {:error, reason} -> raise "failed to load #{inspect(mod)}: #{inspect(reason)}"
+      {:module, ^mod} ->
+        :ok
+
+      {:error, reason} ->
+        raise """
+        failed to load #{inspect(mod)}: #{inspect(reason)}.
+        Run `make build` in the project root before running wrapper tests.
+        """
     end
   end
 end
 
 LibsignalProtocolTestSetup.setup()
-
-# Test helper functions
-defmodule TestHelper do
-  @moduledoc """
-  Helper functions for testing the LibsignalProtocol wrapper.
-  """
-
-  import ExUnit.Assertions
-
-  def generate_test_key(size \\ 32) do
-    :crypto.strong_rand_bytes(size)
-  end
-
-  def assert_binary_result({:ok, result}) when is_binary(result) do
-    assert byte_size(result) > 0
-    result
-  end
-
-  def assert_binary_result({:error, reason}) do
-    # In test environment, NIF might not be loaded, so errors are acceptable
-    assert is_binary(reason) or is_atom(reason)
-    :error
-  end
-
-  def assert_tuple_result({:ok, {a, b}}) when is_binary(a) and is_binary(b) do
-    assert byte_size(a) > 0
-    assert byte_size(b) > 0
-    {a, b}
-  end
-
-  def assert_tuple_result({:error, reason}) do
-    # In test environment, NIF might not be loaded, so errors are acceptable
-    assert is_binary(reason) or is_atom(reason)
-    :error
-  end
-end

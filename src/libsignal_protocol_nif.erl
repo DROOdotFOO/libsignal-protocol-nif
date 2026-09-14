@@ -61,7 +61,7 @@ process_pre_key_bundle(_LocalIdentityKey, _Bundle) ->
 %% RemoteIdentityPub: 32B Ed25519 (Alice's identity pub).
 %% RemoteEphemeralPub: 32B X25519 (Alice's ephemeral, returned by her
 %%   process_pre_key_bundle/2). Returns {ok, SharedSecret} with the same 96B
-%%   secret Alice derived (64B X3DH SK || 32B shared header-key seed for DR-HE).
+%%   secret Alice derived (32B root key || two 32B DR-HE header-key seeds).
 -spec process_pre_key_bundle_bob(IdentityPriv :: binary(),
                                  SignedPreKeyPriv :: binary(),
                                  OneTimePreKeyPriv :: binary(),

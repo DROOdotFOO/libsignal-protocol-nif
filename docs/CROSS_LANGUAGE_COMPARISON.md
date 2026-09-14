@@ -7,8 +7,8 @@ All three wrappers call the same C NIF. Crypto behavior is identical. Difference
 |                 | Erlang                                 | Elixir                                                               | Gleam                                        |
 | --------------- | -------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
 | Hex package     | `libsignal_protocol_nif`               | `libsignal_protocol`                                                 | `libsignal_protocol_gleam`                   |
-| Entry module(s) | `signal_nif`, `libsignal_protocol_nif` | `SignalProtocol`, `LibsignalProtocol`, `SignalProtocol.PreKeyBundle` | `signal_protocol`, `pre_key_bundle`, `utils` |
-| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)` as declared; see Errors  |
+| Entry module(s) | `signal_nif`, `libsignal_protocol_nif` | `SignalProtocol`, `SignalProtocol.PreKeyBundle`                      | `signal_protocol`                            |
+| Return shape    | `{ok, T} \| {error, atom}`             | `{:ok, term} \| {:error, atom}`                                      | `Result(_, String)`                          |
 | Test framework  | Common Test                            | ExUnit                                                               | gleeunit                                     |
 | Static analysis | Dialyzer                               | Dialyzer, Credo                                                      | Gleam compiler                               |
 
@@ -50,19 +50,28 @@ Every generator hands back the private half; the responder needs the pre-key and
 ```
 
 ```elixir
-bundle = <<bob_pub::binary, spk_pub::binary, spk_sig::binary, opk_pub::binary>>
+{:ok, bundle} =
+  SignalProtocol.PreKeyBundle.encode(%SignalProtocol.PreKeyBundle{
+    identity_key: bob_pub,
+    signed_pre_key: spk_pub,
+    signature: spk_sig,
+    one_time_pre_key: opk_pub
+  })
+
 {:ok, {sk, alice_eph_pub}} =
   SignalProtocol.process_pre_key_bundle(alice_priv, bundle)
 ```
 
 ```gleam
-// Build the 128/160-byte NIF bundle layout directly. `pre_key_bundle.create`
-// produces a different, wrapper-local layout that the NIF rejects with
-// `invalid_bundle_size`; do not feed it to process_pre_key_bundle.
-let bundle = <<bob_pub:bits, spk_pub:bits, spk_sig:bits, opk_pub:bits>>
+let bundle =
+  PreKeyBundle(bob_pub, spk_pub, spk_sig, Some(opk_pub))
 let assert Ok(#(sk, alice_eph_pub)) =
   signal_protocol.process_pre_key_bundle(alice_priv, bundle)
 ```
+
+Elixir and Gleam model the bundle as a struct/record and serialize it to the
+same 128/160-byte binary the NIF takes; Erlang callers build that binary
+themselves.
 
 ## Double Ratchet
 
@@ -108,7 +117,15 @@ case SignalProtocol.dr_decrypt_message(session, ct) do
 end
 ```
 
-The Gleam wrapper declares `Result(_, String)`, but most of its externals bind straight to the NIF and the value at runtime is the Erlang atom, not a `String` -- `Error("bad_mac")` will not match and `string.*` functions on the error will crash. Until 0.3 routes every call through the FFI with `atom_to_binary`, treat the error as opaque: match `Error(_)` and log it with `string.inspect`.
+```gleam
+case signal_protocol.dr_decrypt_message(session, ct) {
+  Ok(#(pt, s2)) -> ...
+  Error("bad_mac") -> ...
+  Error(reason) -> ...
+}
+```
+
+The Gleam wrapper routes every call through `libsignal_protocol_gleam_ffi`, which converts the NIF's error atom to a binary, so the declared `Result(_, String)` holds and string matching works. (Through 0.2 the externals bound straight to the NIF and the runtime value was an atom, so `Error("bad_mac")` never matched.)
 
 ## Picking a wrapper
 

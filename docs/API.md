@@ -31,7 +31,9 @@ Lower-level primitives. Stateless, no init required.
 %% Sig: 64 bytes.
 
 ok = signal_nif:verify_signature(Ed25519Pub, Message, Sig).
-%% Returns ok on success, {error, invalid_signature} otherwise.
+%% Returns the bare atom `ok` on success and the bare atom `invalid_signature`
+%% on a bad signature -- not an {ok,_}/{error,_} tuple. Wrong key or signature
+%% sizes do return {error, invalid_public_key} / {error, invalid_signature}.
 ```
 
 ### Hashes and MACs

@@ -73,7 +73,7 @@ C source under `c_src/` is flat, split by concern across files:
 
 The Erlang `libsignal_protocol_nif` module exposes X3DH (`process_pre_key_bundle`, `process_pre_key_bundle_bob`), Double Ratchet (`dr_init`, `dr_encrypt`, `dr_encrypt_prekey`, `dr_decrypt`), PKSM decode and key generation; `signal_nif` exposes the lower-level crypto primitives.
 
-Wrapper structure: `wrappers/elixir/lib/{libsignal_protocol,signal_protocol,pre_key_bundle}.ex` call into `:libsignal_protocol_nif` and pass its `{:ok, ...} | {:error, atom}` shapes through. `wrappers/gleam/src/*.gleam` wraps the same NIF with `Result` types (declared `Result(_, String)`, but most externals currently surface the raw atom — see `docs/CROSS_LANGUAGE_COMPARISON.md`). Both wrappers depend on the parent project producing `priv/libsignal_protocol_nif.so` — they do not build C themselves.
+Wrapper structure: `wrappers/elixir/lib/{signal_protocol,pre_key_bundle}.ex` call into `:libsignal_protocol_nif` and pass its `{:ok, ...} | {:error, atom}` shapes through. `wrappers/gleam/src/signal_protocol.gleam` binds only to `libsignal_protocol_gleam_ffi` (never to the NIF directly), which converts error atoms to binaries so the declared `Result(_, String)` holds. Both wrapper packages declare `libsignal_protocol_nif` as a Hex dependency; neither builds C itself.
 
 ## Conventions
 

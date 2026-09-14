@@ -18,29 +18,34 @@ end
 
 ## Modules
 
-- `LibsignalProtocol` -- `init/0`, `generate_identity_key_pair/0`
 - `SignalProtocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage
-- `SignalProtocol.PreKeyBundle` -- bundle serialize / parse / verify
+- `SignalProtocol.PreKeyBundle` -- bundle encode / decode / signature check
 
 ## Quick start
 
 ```elixir
-:ok = LibsignalProtocol.init()
-
 # Each party generates an identity key pair (Ed25519)
 {:ok, {alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
 {:ok, {bob_pub,   bob_priv}}   = SignalProtocol.generate_identity_key_pair()
 
-# Pre-keys (Bob publishes these)
-{:ok, {opk_id, opk_pub, opk_priv}}            = SignalProtocol.generate_pre_key(1)
-{:ok, {spk_id, spk_pub, spk_priv, spk_sig}}   = SignalProtocol.generate_signed_pre_key(bob_priv, 2)
+# Pre-keys (Bob publishes the public halves)
+{:ok, {opk_id, opk_pub, opk_priv}}          = SignalProtocol.generate_pre_key(1)
+{:ok, {spk_id, spk_pub, spk_priv, spk_sig}} = SignalProtocol.generate_signed_pre_key(bob_priv, 2)
 # Keep opk_priv and spk_priv: process_pre_key_bundle_bob/5 needs them.
 ```
 
-X3DH against a remote bundle. The bundle binary is `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)` with an optional trailing 32-byte one-time prekey. The signature is Ed25519 over `signed_prekey_pub` under the remote identity key.
+X3DH against a remote bundle. `PreKeyBundle.encode/1` produces the exact binary the NIF consumes -- `identity_pub(32) || signed_pre_key_pub(32) || signature(64)`, plus an optional trailing 32-byte one-time pre-key. The signature is Ed25519 over `signed_pre_key_pub` under the identity key.
 
 ```elixir
-bundle = <<bob_pub::binary, spk_pub::binary, spk_sig::binary, opk_pub::binary>>
+alias SignalProtocol.PreKeyBundle
+
+{:ok, bundle} =
+  PreKeyBundle.encode(%PreKeyBundle{
+    identity_key: bob_pub,
+    signed_pre_key: spk_pub,
+    signature: spk_sig,
+    one_time_pre_key: opk_pub
+  })
 
 {:ok, {shared_secret, alice_eph_pub}} =
   SignalProtocol.process_pre_key_bundle(alice_priv, bundle)

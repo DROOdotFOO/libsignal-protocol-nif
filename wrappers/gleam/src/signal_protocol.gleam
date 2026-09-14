@@ -1,15 +1,21 @@
 import gleam/option.{type Option}
 import gleam/result
 
-/// Pre-key bundle: the public material a remote party publishes so others
-/// can initiate sessions with them asynchronously.
+/// Pre-key bundle: the public material a party publishes so others can
+/// start sessions with them asynchronously. Serialized by `encode_bundle`
+/// to exactly what the NIF consumes:
+///
+///   identity_key(32) || signed_pre_key(32) || signature(64)
+///                    [|| one_time_pre_key(32)]
+///
+/// Key ids and the registration id are not part of this binary -- they
+/// travel in the PreKeySignalMessage of the first message.
 pub type PreKeyBundle {
   PreKeyBundle(
-    registration_id: Int,
     identity_key: BitArray,
-    pre_key: #(Int, BitArray),
-    signed_pre_key: #(Int, BitArray, BitArray),
-    base_key: BitArray,
+    signed_pre_key: BitArray,
+    signature: BitArray,
+    one_time_pre_key: Option(BitArray),
   )
 }
 
@@ -47,26 +53,31 @@ pub type DrRole {
   Bob
 }
 
-// --- FFI: libsignal_protocol_nif integration ---
-@external(erlang, "libsignal_protocol_nif", "generate_identity_key_pair")
+// --- FFI ---
+//
+// Every call goes through `libsignal_protocol_gleam_ffi`, which converts the
+// NIF's `{error, Atom}` into the `Error(String)` these signatures promise.
+// Binding directly to `libsignal_protocol_nif` would surface a raw atom and
+// break every `Error("...")` match.
+@external(erlang, "libsignal_protocol_gleam_ffi", "generate_identity_key_pair")
 fn call_nif_generate_identity_key_pair() -> Result(#(BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "generate_pre_key")
+@external(erlang, "libsignal_protocol_gleam_ffi", "generate_pre_key")
 fn call_nif_generate_pre_key(key_id: Int) -> Result(#(Int, BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "generate_signed_pre_key")
+@external(erlang, "libsignal_protocol_gleam_ffi", "generate_signed_pre_key")
 fn call_nif_generate_signed_pre_key(
   identity_key: BitArray,
   key_id: Int,
 ) -> Result(#(Int, BitArray, BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "process_pre_key_bundle")
+@external(erlang, "libsignal_protocol_gleam_ffi", "process_pre_key_bundle")
 fn call_nif_process_pre_key_bundle(
   local_identity_priv: BitArray,
   bundle: BitArray,
 ) -> Result(#(BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "dr_init")
+@external(erlang, "libsignal_protocol_gleam_ffi", "dr_init")
 fn call_nif_init_double_ratchet(
   shared_secret: BitArray,
   local_identity_pub: BitArray,
@@ -75,13 +86,13 @@ fn call_nif_init_double_ratchet(
   is_alice: Int,
 ) -> Result(BitArray, String)
 
-@external(erlang, "libsignal_protocol_nif", "dr_encrypt")
+@external(erlang, "libsignal_protocol_gleam_ffi", "dr_encrypt")
 fn call_nif_dr_encrypt(
   dr_session: BitArray,
   message: BitArray,
 ) -> Result(#(BitArray, BitArray), String)
 
-@external(erlang, "libsignal_protocol_nif", "dr_decrypt")
+@external(erlang, "libsignal_protocol_gleam_ffi", "dr_decrypt")
 fn call_nif_dr_decrypt(
   dr_session: BitArray,
   ciphertext: BitArray,
@@ -148,8 +159,8 @@ pub fn generate_signed_pre_key(
 /// Performs X3DH key agreement against a remote pre-key bundle.
 ///
 /// Returns `#(shared_secret, ephemeral_pub)` where the 96-byte shared secret
-/// (64B X3DH SK || 32B DR-HE shared header-key seed) is suitable to feed
-/// into `init_double_ratchet` as the DR root seed.
+/// (32B DR root key || two 32B per-direction DR-HE header-key seeds) is fed
+/// straight into `init_double_ratchet`.
 pub fn process_pre_key_bundle(
   local_identity_priv: BitArray,
   bundle: PreKeyBundle,
@@ -157,19 +168,51 @@ pub fn process_pre_key_bundle(
   call_nif_process_pre_key_bundle(local_identity_priv, encode_bundle(bundle))
 }
 
-// Serialize a pre-key bundle to the format the C NIF expects:
-//   remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(32)
-// followed optionally by a 32-byte one-time prekey.
-fn encode_bundle(bundle: PreKeyBundle) -> BitArray {
-  let #(_pre_key_id, pre_key_public) = bundle.pre_key
-  let #(_signed_pre_key_id, signed_pre_key_public, signed_pre_key_signature) =
-    bundle.signed_pre_key
+/// Serializes a pre-key bundle to the NIF wire form:
+///   identity_key(32) || signed_pre_key(32) || signature(64)
+///                    [|| one_time_pre_key(32)]
+pub fn encode_bundle(bundle: PreKeyBundle) -> BitArray {
+  let opk = case bundle.one_time_pre_key {
+    option.Some(key) -> key
+    option.None -> <<>>
+  }
   <<
     bundle.identity_key:bits,
-    signed_pre_key_public:bits,
-    signed_pre_key_signature:bits,
-    pre_key_public:bits,
+    bundle.signed_pre_key:bits,
+    bundle.signature:bits,
+    opk:bits,
   >>
+}
+
+/// Parses a pre-key bundle from its wire form. Accepts exactly 128 bytes
+/// (no one-time pre-key) or 160 bytes (with one).
+pub fn decode_bundle(wire: BitArray) -> Result(PreKeyBundle, String) {
+  case wire {
+    <<
+      identity_key:bytes-size(32),
+      signed_pre_key:bytes-size(32),
+      signature:bytes-size(64),
+    >> ->
+      Ok(PreKeyBundle(
+        identity_key,
+        signed_pre_key,
+        signature,
+        option.None,
+      ))
+    <<
+      identity_key:bytes-size(32),
+      signed_pre_key:bytes-size(32),
+      signature:bytes-size(64),
+      one_time_pre_key:bytes-size(32),
+    >> ->
+      Ok(PreKeyBundle(
+        identity_key,
+        signed_pre_key,
+        signature,
+        option.Some(one_time_pre_key),
+      ))
+    _ -> Error("invalid_bundle_size")
+  }
 }
 
 // --- Double Ratchet ---
@@ -264,8 +307,8 @@ pub type PksmMessage {
 }
 
 /// Bob's side of X3DH. Returns the same 96-byte shared secret Alice
-/// derives from `process_pre_key_bundle` (64B X3DH SK || 32B DR-HE shared
-/// header-key seed).
+/// derives from `process_pre_key_bundle` (32B root key || two 32B
+/// per-direction DR-HE header-key seeds).
 ///
 /// Pass an empty `BitArray` for `one_time_pre_key_priv` when no OPK is
 /// being used.
