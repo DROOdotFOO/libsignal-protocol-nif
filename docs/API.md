@@ -75,18 +75,14 @@ ok = libsignal_protocol_nif:init().
 {ok, {IdPub, IdPriv}} = libsignal_protocol_nif:generate_identity_key_pair().
 %% IdPub: 32B Ed25519 pub. IdPriv: 64B Ed25519 secret-key encoding.
 
-{ok, {KeyId, PreKeyPub}} = libsignal_protocol_nif:generate_pre_key(KeyId).
-%% PreKeyPub: 32B X25519. The private half is generated and discarded -- this
-%% function cannot produce a pre-key Bob can later use in
-%% process_pre_key_bundle_bob/5. Use signal_nif:generate_curve25519_keypair/0
-%% and keep the private key yourself (see test/erl/unit/protocol/pksm_SUITE.erl).
+{ok, {KeyId, PreKeyPub, PreKeyPriv}} = libsignal_protocol_nif:generate_pre_key(KeyId).
+%% PreKeyPub, PreKeyPriv: 32B X25519. Keep the private half: it is what
+%% process_pre_key_bundle_bob/5 needs when someone uses this one-time pre-key.
 
-{ok, {KeyId, SpkPub, Sig}} =
+{ok, {KeyId, SpkPub, SpkPriv, Sig}} =
     libsignal_protocol_nif:generate_signed_pre_key(IdPriv, KeyId).
-%% SpkPub: 32B X25519. Sig: 64B Ed25519 over SpkPub. Same caveat: the SPK
-%% private key is discarded. Generate the pair with
-%% signal_nif:generate_curve25519_keypair/0 and sign SpkPub with
-%% signal_nif:sign_data/2 instead.
+%% SpkPub, SpkPriv: 32B X25519. Sig: 64B Ed25519 over SpkPub, made with
+%% IdPriv. Keep SpkPriv for process_pre_key_bundle_bob/5.
 ```
 
 ### Simple session (ChaCha20-Poly1305)
@@ -199,13 +195,14 @@ Bob decodes the envelope, recovers the X3DH shared secret, initializes his DR si
 {ok, {RegistrationId, BaseKey32, IdKey32, OpkId, SpkId, InnerWire}} =
     libsignal_protocol_nif:pksm_decode(WireBytes).
 %% OpkId is an integer or undefined.
-%% IdKey is Alice's identity pub in X25519 (DJB) form. dr_init/5 and
-%% process_pre_key_bundle_bob/5 need the Ed25519 form, which is not
-%% recoverable from this field -- Bob must obtain Alice's Ed25519 identity
-%% pub out of band (e.g. from her published bundle) for now.
+%% IdKey is Alice's Ed25519 identity pub -- feed it straight to
+%% process_pre_key_bundle_bob/5 and dr_init/5. BaseKey is her X3DH
+%% ephemeral pub. Both are validated to be exactly 32 bytes.
 ```
 
-Errors: `malformed_message` (bad version byte, truncated, or unparseable protobuf). `dr_encrypt_prekey/3` additionally returns `pksm_encode_failed`.
+That is everything Bob needs: he looks up the SPK/OPK privs by id, runs `process_pre_key_bundle_bob/5` with `IdKey` and `BaseKey`, calls `dr_init/5`, and decrypts `InnerWire` with `dr_decrypt/2`. See `test/erl/unit/protocol/pksm_SUITE.erl` for the full sequence.
+
+Errors: `malformed_message` (bad version byte, truncated, unparseable protobuf, or a `base_key`/`identity_key` that is not 32 bytes). `dr_encrypt_prekey/3` additionally returns `pksm_encode_failed`.
 
 A PreKeySignalMessage carries no freshness on its own: if Bob does not delete the one-time pre-key it consumed (or the message used none), the same envelope can be replayed to re-derive the session and re-decrypt the first message. Delete OPKs on first use.
 

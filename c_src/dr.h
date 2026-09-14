@@ -67,6 +67,13 @@ typedef struct {
     unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
     unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
 
+    // Local identity pub in Ed25519 (signing) form. Only used to populate the
+    // PreKeySignalMessage `identity_key` field so Bob can feed it straight
+    // into process_pre_key_bundle_bob/5 and dr_init/5, both of which need
+    // the Ed25519 form: X25519 -> Ed25519 is not uniquely invertible, so a
+    // PKSM carrying the X25519 form leaves Bob unable to bootstrap.
+    unsigned char local_identity_pub_ed[crypto_sign_PUBLICKEYBYTES];
+
     // DR-HE (header encryption) keys. HKs/HKr protect the current chain's
     // headers (AES-256-CBC + HMAC tag, both keys from HKDF(hk,
     // "WhisperHeader")); NHKs/NHKr are pre-derived for the *next* DH ratchet

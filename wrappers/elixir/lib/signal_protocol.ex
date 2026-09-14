@@ -12,11 +12,22 @@ defmodule SignalProtocol do
   @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, term()}
   def generate_identity_key_pair, do: @nif.generate_identity_key_pair()
 
-  @spec generate_pre_key(non_neg_integer()) :: {:ok, {non_neg_integer(), binary()}} | {:error, term()}
+  @doc """
+  Generates an X25519 pre-key. Returns `{key_id, public, private}`; keep the
+  private half to run `process_pre_key_bundle_bob/5` against the published
+  pre-key.
+  """
+  @spec generate_pre_key(non_neg_integer()) ::
+          {:ok, {non_neg_integer(), binary(), binary()}} | {:error, atom()}
   def generate_pre_key(key_id) when is_integer(key_id), do: @nif.generate_pre_key(key_id)
 
+  @doc """
+  Generates an X25519 signed pre-key. Returns
+  `{key_id, public, private, signature}` -- the signature is Ed25519 over the
+  public key under `identity_key`.
+  """
   @spec generate_signed_pre_key(binary(), non_neg_integer()) ::
-          {:ok, {non_neg_integer(), binary(), binary()}} | {:error, term()}
+          {:ok, {non_neg_integer(), binary(), binary(), binary()}} | {:error, atom()}
   def generate_signed_pre_key(identity_key, key_id)
       when is_binary(identity_key) and is_integer(key_id) do
     @nif.generate_signed_pre_key(identity_key, key_id)

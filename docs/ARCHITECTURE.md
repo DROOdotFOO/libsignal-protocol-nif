@@ -77,7 +77,7 @@ version_byte(0x33)
                 pre_key_id=4 (optional), signed_pre_key_id=5, message=6 }
 ```
 
-`identity_key` is in X25519 (DJB) form. The DR MAC scope already uses X25519 identity pubs (converted at `dr_init`), so the envelope is wire-spec compatible with libsignal. `pre_key_id` is optional -- absent means no OPK was consumed.
+`identity_key` is Alice's Ed25519 identity pub, the form `process_pre_key_bundle_bob/5` and `dr_init/5` both take, so Bob can bootstrap from the envelope alone. (Through 0.2 it was sent in X25519 (DJB) form, matching libsignal's wire spec, but X25519 -> Ed25519 is not uniquely invertible so the field was unusable here; the DR MAC scope still uses the X25519 forms internally.) Both `identity_key` and `base_key` are rejected unless exactly 32 bytes. `pre_key_id` is optional -- absent means no OPK was consumed.
 
 The `message` field carries the full inner DR `SignalMessage` (version byte + outer protobuf + MAC). `dr_encrypt_prekey/3` and `dr_encrypt/2` share the same `dr_encrypt_core` helper for the cipher + MAC + envelope path.
 

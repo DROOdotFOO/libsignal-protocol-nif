@@ -32,8 +32,9 @@ end
 {:ok, {bob_pub,   bob_priv}}   = SignalProtocol.generate_identity_key_pair()
 
 # Pre-keys (Bob publishes these)
-{:ok, {opk_id, opk_pub}}            = SignalProtocol.generate_pre_key(1)
-{:ok, {spk_id, spk_pub, spk_sig}}   = SignalProtocol.generate_signed_pre_key(bob_priv, 2)
+{:ok, {opk_id, opk_pub, opk_priv}}            = SignalProtocol.generate_pre_key(1)
+{:ok, {spk_id, spk_pub, spk_priv, spk_sig}}   = SignalProtocol.generate_signed_pre_key(bob_priv, 2)
+# Keep opk_priv and spk_priv: process_pre_key_bundle_bob/5 needs them.
 ```
 
 X3DH against a remote bundle. The bundle binary is `remote_identity_pub(32) ++ signed_prekey_pub(32) ++ signature(64)` with an optional trailing 32-byte one-time prekey. The signature is Ed25519 over `signed_prekey_pub` under the remote identity key.

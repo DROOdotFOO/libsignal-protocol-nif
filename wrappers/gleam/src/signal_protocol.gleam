@@ -19,17 +19,24 @@ pub type IdentityKeyPair {
   IdentityKeyPair(public_key: BitArray, private_key: BitArray)
 }
 
-/// One-time pre-key.
+/// One-time pre-key. `private_key` must be stored: the DH half is needed to
+/// complete X3DH on the responder side.
 pub type PreKey {
-  PreKey(key_id: Int, public_key: BitArray)
+  PreKey(key_id: Int, public_key: BitArray, private_key: BitArray)
 }
 
-/// Signed pre-key with HMAC-SHA512-256 signature over the public key.
+/// Signed pre-key: an X25519 keypair whose public half carries an Ed25519
+/// signature made with the identity private key.
 pub type SignedPreKey {
-  SignedPreKey(key_id: Int, public_key: BitArray, signature: BitArray)
+  SignedPreKey(
+    key_id: Int,
+    public_key: BitArray,
+    private_key: BitArray,
+    signature: BitArray,
+  )
 }
 
-/// Opaque Double Ratchet session state (~2.6 KB).
+/// Opaque Double Ratchet session state (~5.3 KB).
 pub type DrSession {
   DrSession(state: BitArray)
 }
@@ -45,13 +52,13 @@ pub type DrRole {
 fn call_nif_generate_identity_key_pair() -> Result(#(BitArray, BitArray), String)
 
 @external(erlang, "libsignal_protocol_nif", "generate_pre_key")
-fn call_nif_generate_pre_key(key_id: Int) -> Result(#(Int, BitArray), String)
+fn call_nif_generate_pre_key(key_id: Int) -> Result(#(Int, BitArray, BitArray), String)
 
 @external(erlang, "libsignal_protocol_nif", "generate_signed_pre_key")
 fn call_nif_generate_signed_pre_key(
   identity_key: BitArray,
   key_id: Int,
-) -> Result(#(Int, BitArray, BitArray), String)
+) -> Result(#(Int, BitArray, BitArray, BitArray), String)
 
 @external(erlang, "libsignal_protocol_nif", "process_pre_key_bundle")
 fn call_nif_process_pre_key_bundle(
@@ -110,17 +117,17 @@ fn call_nif_pksm_decode(
 pub fn generate_identity_key_pair() -> Result(IdentityKeyPair, String) {
   call_nif_generate_identity_key_pair()
   |> result.map(fn(pair) {
-    let #(public_key, signature) = pair
-    IdentityKeyPair(public_key, signature)
+    let #(public_key, private_key) = pair
+    IdentityKeyPair(public_key, private_key)
   })
 }
 
 /// Generates a new pre-key with the given ID.
 pub fn generate_pre_key(key_id: Int) -> Result(PreKey, String) {
   call_nif_generate_pre_key(key_id)
-  |> result.map(fn(pair) {
-    let #(id, public_key) = pair
-    PreKey(id, public_key)
+  |> result.map(fn(triple) {
+    let #(id, public_key, private_key) = triple
+    PreKey(id, public_key, private_key)
   })
 }
 
@@ -130,9 +137,9 @@ pub fn generate_signed_pre_key(
   key_id: Int,
 ) -> Result(SignedPreKey, String) {
   call_nif_generate_signed_pre_key(identity_key, key_id)
-  |> result.map(fn(triple) {
-    let #(id, public_key, signature) = triple
-    SignedPreKey(id, public_key, signature)
+  |> result.map(fn(quad) {
+    let #(id, public_key, private_key, signature) = quad
+    SignedPreKey(id, public_key, private_key, signature)
   })
 }
 

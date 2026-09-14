@@ -8,27 +8,31 @@ defmodule SignalProtocolTest do
     assert pub != priv
   end
 
-  test "generate_pre_key echoes the key_id with a 32-byte public key" do
+  test "generate_pre_key echoes the key_id with a 32-byte keypair" do
     key_id = :rand.uniform(1000)
-    assert {:ok, {^key_id, public_key}} = SignalProtocol.generate_pre_key(key_id)
+    assert {:ok, {^key_id, public_key, private_key}} = SignalProtocol.generate_pre_key(key_id)
     assert byte_size(public_key) == 32
+    assert byte_size(private_key) == 32
+    assert public_key != private_key
   end
 
-  test "generate_signed_pre_key returns key_id, 32B public, 64B Ed25519 signature" do
-    {:ok, {_pub, priv}} = SignalProtocol.generate_identity_key_pair()
+  test "generate_signed_pre_key returns key_id, keypair and 64B Ed25519 signature" do
+    {:ok, {pub, priv}} = SignalProtocol.generate_identity_key_pair()
     key_id = :rand.uniform(1000)
 
-    assert {:ok, {^key_id, public_key, signature}} =
+    assert {:ok, {^key_id, public_key, private_key, signature}} =
              SignalProtocol.generate_signed_pre_key(priv, key_id)
 
     assert byte_size(public_key) == 32
+    assert byte_size(private_key) == 32
     assert byte_size(signature) == 64
+    assert :ok == :signal_nif.verify_signature(pub, public_key, signature)
   end
 
   test "process_pre_key_bundle performs X3DH and returns {shared_secret, ephemeral_pub}" do
     {:ok, {_alice_pub, alice_priv}} = SignalProtocol.generate_identity_key_pair()
     {:ok, {bob_id_pub, bob_id_priv}} = SignalProtocol.generate_identity_key_pair()
-    {:ok, {_key_id, spk_pub, signature}} =
+    {:ok, {_key_id, spk_pub, _spk_priv, signature}} =
       SignalProtocol.generate_signed_pre_key(bob_id_priv, 1)
     bundle = bob_id_pub <> spk_pub <> signature
 

@@ -28,14 +28,21 @@ init() ->
 generate_identity_key_pair() ->
     erlang:nif_error(nif_not_loaded).
 
+%% Both generators return the private half: Bob must keep it to run
+%% process_pre_key_bundle_bob/5 against the bundle he published.
 -spec generate_pre_key(KeyId :: non_neg_integer()) ->
-                          {ok, {non_neg_integer(), X25519Pub :: binary()}} | {error, atom()}.
+                          {ok,
+                           {non_neg_integer(), X25519Pub :: binary(), X25519Priv :: binary()}} |
+                          {error, atom()}.
 generate_pre_key(_KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
 -spec generate_signed_pre_key(IdentityPriv :: binary(), KeyId :: non_neg_integer()) ->
                                  {ok,
-                                  {non_neg_integer(), SpkPub :: binary(), Signature :: binary()}} |
+                                  {non_neg_integer(),
+                                   SpkPub :: binary(),
+                                   SpkPriv :: binary(),
+                                   Signature :: binary()}} |
                                  {error, atom()}.
 generate_signed_pre_key(_IdentityKey, _KeyId) ->
     erlang:nif_error(nif_not_loaded).

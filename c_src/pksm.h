@@ -11,7 +11,7 @@
 //   PreKeySignalMessage {
 //       uint32 registration_id    = 1;   // varint
 //       bytes  base_key           = 2;   // Alice's X3DH ephemeral pub (32B)
-//       bytes  identity_key       = 3;   // Alice's X25519 identity pub (32B)
+//       bytes  identity_key       = 3;   // Alice's Ed25519 identity pub (32B)
 //       uint32 pre_key_id         = 4;   // optional one-time-prekey id
 //       uint32 signed_pre_key_id  = 5;
 //       bytes  message            = 6;   // serialized inner SignalMessage

@@ -35,41 +35,47 @@ ERL_NIF_TERM generate_identity_key_pair(ErlNifEnv *env, int argc, const ERL_NIF_
                            enif_make_tuple2(env, public_term, private_term));
 }
 
-// Generate pre-key using Curve25519
+// Generate an X25519 pre-key. Returns {KeyId, Pub(32), Priv(32)} -- the
+// caller must store Priv to later run process_pre_key_bundle_bob/5 with the
+// pre-key it published.
 ERL_NIF_TERM generate_pre_key(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 1) {
         return enif_make_badarg(env);
     }
-    
+
     int key_id;
     if (!enif_get_int(env, argv[0], &key_id)) {
         return enif_make_badarg(env);
     }
-    
-    // Generate real Curve25519 pre-key
+
     unsigned char public_key[crypto_box_PUBLICKEYBYTES];
     unsigned char private_key[crypto_box_SECRETKEYBYTES];
-    
+
     if (crypto_box_keypair(public_key, private_key) != 0) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                enif_make_atom(env, "key_generation_failed"));
     }
-    
-    ERL_NIF_TERM pre_key_term;
-    unsigned char *pre_key_data = enif_make_new_binary(env, crypto_box_PUBLICKEYBYTES, &pre_key_term);
-    memcpy(pre_key_data, public_key, crypto_box_PUBLICKEYBYTES);
-    
-    // Clear sensitive data
+
+    ERL_NIF_TERM pub_term, priv_term;
+    unsigned char *pub_data =
+        enif_make_new_binary(env, crypto_box_PUBLICKEYBYTES, &pub_term);
+    unsigned char *priv_data =
+        enif_make_new_binary(env, crypto_box_SECRETKEYBYTES, &priv_term);
+    memcpy(pub_data, public_key, crypto_box_PUBLICKEYBYTES);
+    memcpy(priv_data, private_key, crypto_box_SECRETKEYBYTES);
+
     sodium_memzero(private_key, sizeof(private_key));
-    
-    return enif_make_tuple2(env, enif_make_atom(env, "ok"), 
-                           enif_make_tuple2(env, enif_make_int(env, key_id), pre_key_term));
+
+    return enif_make_tuple2(env, enif_make_atom(env, "ok"),
+                           enif_make_tuple3(env, enif_make_int(env, key_id),
+                                            pub_term, priv_term));
 }
 
 // Generate a signed pre-key: an X25519 keypair (for DH) whose public key is
 // signed with the caller's Ed25519 identity priv. Returns
-// {KeyId, SpkPub(32), Signature(64)}.
+// {KeyId, SpkPub(32), SpkPriv(32), Signature(64)} -- the caller must store
+// SpkPriv to later run process_pre_key_bundle_bob/5.
 ERL_NIF_TERM generate_signed_pre_key(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 2) {
@@ -108,20 +114,23 @@ ERL_NIF_TERM generate_signed_pre_key(ErlNifEnv *env, int argc, const ERL_NIF_TER
                                enif_make_atom(env, "signature_failed"));
     }
 
-    ERL_NIF_TERM pre_key_term, signature_term;
-    unsigned char *pre_key_data =
-        enif_make_new_binary(env, crypto_box_PUBLICKEYBYTES, &pre_key_term);
+    ERL_NIF_TERM pub_term, priv_term, signature_term;
+    unsigned char *pub_data =
+        enif_make_new_binary(env, crypto_box_PUBLICKEYBYTES, &pub_term);
+    unsigned char *priv_data =
+        enif_make_new_binary(env, crypto_box_SECRETKEYBYTES, &priv_term);
     unsigned char *signature_data =
         enif_make_new_binary(env, crypto_sign_BYTES, &signature_term);
 
-    memcpy(pre_key_data, spk_pub, crypto_box_PUBLICKEYBYTES);
+    memcpy(pub_data, spk_pub, crypto_box_PUBLICKEYBYTES);
+    memcpy(priv_data, spk_priv, crypto_box_SECRETKEYBYTES);
     memcpy(signature_data, signature, crypto_sign_BYTES);
 
     sodium_memzero(spk_priv, sizeof(spk_priv));
 
     return enif_make_tuple2(
         env, enif_make_atom(env, "ok"),
-        enif_make_tuple3(env, enif_make_int(env, key_id), pre_key_term,
+        enif_make_tuple4(env, enif_make_int(env, key_id), pub_term, priv_term,
                          signature_term));
 }
 

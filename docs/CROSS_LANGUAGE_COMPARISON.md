@@ -20,15 +20,15 @@ For the lower-level primitives (`sha256/1`, `aes_gcm_encrypt/5`, `sign_data/2`, 
 
 ```erlang
 {ok, {Pub, Priv}} = libsignal_protocol_nif:generate_identity_key_pair().
-{ok, {KeyId, PreKeyPub}} = libsignal_protocol_nif:generate_pre_key(1).
-{ok, {KeyId, SpkPub, Sig}} =
+{ok, {KeyId, PreKeyPub, PreKeyPriv}} = libsignal_protocol_nif:generate_pre_key(1).
+{ok, {KeyId, SpkPub, SpkPriv, Sig}} =
     libsignal_protocol_nif:generate_signed_pre_key(Priv, 2).
 ```
 
 ```elixir
 {:ok, {pub, priv}} = SignalProtocol.generate_identity_key_pair()
-{:ok, {key_id, pre_key_pub}} = SignalProtocol.generate_pre_key(1)
-{:ok, {key_id, spk_pub, sig}} =
+{:ok, {key_id, pre_key_pub, pre_key_priv}} = SignalProtocol.generate_pre_key(1)
+{:ok, {key_id, spk_pub, spk_priv, sig}} =
   SignalProtocol.generate_signed_pre_key(priv, 2)
 ```
 
@@ -39,7 +39,7 @@ let assert Ok(spk)      =
   signal_protocol.generate_signed_pre_key(identity.private_key, 2)
 ```
 
-The Gleam wrapper returns typed records (`IdentityKeyPair`, `PreKey`, `SignedPreKey`). Erlang and Elixir return raw tuples.
+Every generator hands back the private half; the responder needs the pre-key and signed-pre-key privates to complete X3DH. The Gleam wrapper returns typed records (`IdentityKeyPair`, `PreKey`, `SignedPreKey`); Erlang and Elixir return raw tuples.
 
 ## X3DH
 

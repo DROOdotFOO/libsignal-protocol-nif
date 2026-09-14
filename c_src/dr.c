@@ -133,7 +133,10 @@ ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     memcpy(state.next_header_key_send, is_alice ? seed_b : seed_a, 32);
     memcpy(state.next_header_key_recv, is_alice ? seed_a : seed_b, 32);
 
-    // Convert + store both identity pubs as X25519 form (used as MAC binding).
+    // Keep the Ed25519 local identity pub for the PKSM envelope, and store
+    // both identity pubs in X25519 form for the MAC binding.
+    memcpy(state.local_identity_pub_ed, local_identity_pub.data,
+           crypto_sign_PUBLICKEYBYTES);
     if (crypto_sign_ed25519_pk_to_curve25519(state.local_identity_pub,
                                              local_identity_pub.data) != 0 ||
         crypto_sign_ed25519_pk_to_curve25519(state.remote_identity_pub,
@@ -421,7 +424,7 @@ ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     pksm_len = pksm_encode(pksm_buf, 80 + inner_wire_len,
                            registration_id,
                            base_key.data, base_key.size,
-                           state.local_identity_pub, crypto_box_PUBLICKEYBYTES,
+                           state.local_identity_pub_ed, crypto_sign_PUBLICKEYBYTES,
                            pre_key_id, has_pre_key_id,
                            signed_pre_key_id,
                            inner_wire, inner_wire_len);
