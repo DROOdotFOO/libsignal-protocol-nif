@@ -1,9 +1,8 @@
 -module(libsignal_protocol_nif).
 
 -export([init/0, generate_identity_key_pair/0, generate_pre_key/1,
-         generate_signed_pre_key/2, process_pre_key_bundle/2,
-         process_pre_key_bundle_bob/5, dr_init/5,
-         dr_encrypt/2, dr_encrypt_prekey/3, dr_decrypt/2, pksm_decode/1]).
+         generate_signed_pre_key/2, process_pre_key_bundle/2, process_pre_key_bundle_bob/5,
+         dr_init/5, dr_encrypt/2, dr_encrypt_prekey/3, dr_decrypt/2, pksm_decode/1]).
 
 -on_load load_nif/0.
 
@@ -31,8 +30,7 @@ generate_identity_key_pair() ->
 %% Both generators return the private half: Bob must keep it to run
 %% process_pre_key_bundle_bob/5 against the bundle he published.
 -spec generate_pre_key(KeyId :: non_neg_integer()) ->
-                          {ok,
-                           {non_neg_integer(), X25519Pub :: binary(), X25519Priv :: binary()}} |
+                          {ok, {non_neg_integer(), X25519Pub :: binary(), X25519Priv :: binary()}} |
                           {error, atom()}.
 generate_pre_key(_KeyId) ->
     erlang:nif_error(nif_not_loaded).

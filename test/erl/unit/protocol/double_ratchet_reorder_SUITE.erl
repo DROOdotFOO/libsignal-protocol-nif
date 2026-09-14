@@ -125,13 +125,11 @@ skip_budget_is_per_chain(Config) ->
     _ = bob_receives(BobB1, shuffle(OldTailB ++ NewPrefixB)),
 
     %% One past MAX_SKIP on the new chain is rejected.
-    {BobC, _, _, {_, OverCT}} =
-        ratchet_with_skips(parties(Config), 2, ?MAX_SKIP + 2),
+    {BobC, _, _, {_, OverCT}} = ratchet_with_skips(parties(Config), 2, ?MAX_SKIP + 2),
     ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobC, OverCT)),
 
     %% One past MAX_SKIP on the old chain is rejected.
-    {BobD, _, _, {_, OverCT2}} =
-        ratchet_with_skips(parties(Config), ?MAX_SKIP + 3, 2),
+    {BobD, _, _, {_, OverCT2}} = ratchet_with_skips(parties(Config), ?MAX_SKIP + 3, 2),
     ?assertEqual({error, too_many_skipped}, libsignal_protocol_nif:dr_decrypt(BobD, OverCT2)).
 
 %% Keys cached by an earlier receive must survive a later receive that banks

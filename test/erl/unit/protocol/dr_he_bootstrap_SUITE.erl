@@ -132,16 +132,19 @@ corrupt_blob_never_crashes(_Config) ->
     {ok, Alice} = libsignal_protocol_nif:dr_init(SS, AlicePub, BobPub, <<>>, 1),
     {ok, Bob} = libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0),
     {ok, {CT, _Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice, <<"payload">>),
-    Bad =
-        [Pos
-         || Pos <- lists:seq(0, byte_size(Bob) - 1),
-            not is_term_result(
-                    catch libsignal_protocol_nif:dr_decrypt(set_byte(Bob, Pos, 16#FF), CT))],
+    Bad = [Pos
+           || Pos <- lists:seq(0, byte_size(Bob) - 1),
+              not
+                  is_term_result(catch libsignal_protocol_nif:dr_decrypt(set_byte(Bob, Pos, 16#FF),
+                                                                         CT))],
     ?assertEqual([], Bad).
 
-is_term_result({ok, {_, _}}) -> true;
-is_term_result({error, Atom}) when is_atom(Atom) -> true;
-is_term_result(_) -> false.
+is_term_result({ok, {_, _}}) ->
+    true;
+is_term_result({error, Atom}) when is_atom(Atom) ->
+    true;
+is_term_result(_) ->
+    false.
 
 %% ============================================================================
 %% Helpers
@@ -154,7 +157,9 @@ fresh_identities() ->
 
 fresh_session() ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
-    {ok, Session} = libsignal_protocol_nif:dr_init(rand:bytes(96), AlicePub, BobPub, <<>>, 1),
+    {ok, Session} =
+        libsignal_protocol_nif:dr_init(
+            rand:bytes(96), AlicePub, BobPub, <<>>, 1),
     Session.
 
 flip_bit(Bin, Pos) ->

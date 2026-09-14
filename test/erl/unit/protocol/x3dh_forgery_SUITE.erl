@@ -61,8 +61,10 @@ bundle_length_is_pinned(_Config) ->
     128 = byte_size(B128),
     160 = byte_size(B160),
     %% Both legal lengths are accepted.
-    ?assertMatch({ok, {_, _}}, libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, B128)),
-    ?assertMatch({ok, {_, _}}, libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, B160)),
+    ?assertMatch({ok, {_, _}},
+                 libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, B128)),
+    ?assertMatch({ok, {_, _}},
+                 libsignal_protocol_nif:process_pre_key_bundle(AliceIdPriv, B160)),
     %% Everything else is rejected on length alone, before any DH.
     lists:foreach(fun(Bad) ->
                      ?assertEqual({error, invalid_bundle_size},

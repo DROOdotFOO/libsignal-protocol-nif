@@ -157,8 +157,14 @@ decode_rejects_bad_key_lengths(_Config) ->
                                   libsignal_protocol_nif:pksm_decode(Wire),
                                   {BaseLen, IdLen})
                   end,
-                  [{0, Good}, {31, Good}, {33, Good}, {64, Good},
-                   {Good, 0}, {Good, 31}, {Good, 33}, {Good, 64}]),
+                  [{0, Good},
+                   {31, Good},
+                   {33, Good},
+                   {64, Good},
+                   {Good, 0},
+                   {Good, 31},
+                   {Good, 33},
+                   {Good, 64}]),
     %% Control: the same builder with both keys at 32 bytes decodes.
     ?assertMatch({ok, {7, _, _, undefined, 9, Inner}},
                  libsignal_protocol_nif:pksm_decode(forged_pksm(Good, Good, Inner))).
@@ -168,11 +174,19 @@ decode_rejects_bad_key_lengths(_Config) ->
 %% each varint is a single byte.
 forged_pksm(BaseLen, IdLen, Inner) ->
     <<16#33,
-      16#08, 7,
-      16#12, BaseLen, (rand:bytes(BaseLen))/binary,
-      16#1A, IdLen, (rand:bytes(IdLen))/binary,
-      16#28, 9,
-      16#32, (byte_size(Inner)), Inner/binary>>.
+      16#08,
+      7,
+      16#12,
+      BaseLen,
+      (rand:bytes(BaseLen))/binary,
+      16#1A,
+      IdLen,
+      (rand:bytes(IdLen))/binary,
+      16#28,
+      9,
+      16#32,
+      (byte_size(Inner)),
+      Inner/binary>>.
 
 %% registration_id, pre_key_id and signed_pre_key_id are all uint32 on the
 %% wire, so each can need a 5-byte varint. The encode buffer must budget for
