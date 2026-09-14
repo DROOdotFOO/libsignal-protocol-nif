@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Hex release publishing now selects the repository explicitly so environment credentials are applied, publishes the NIF without requiring an unconfigured documentation provider, and uses the development environment for Elixir documentation. CI can publish an existing release tag without moving it, including the published-package consumer checks.
+
 ## [0.3.0] - 2026-09-14
 
 Security release. Closes a remotely reachable pre-authentication stack overflow in the Double Ratchet receive path (also fixed in 0.2.1), then authenticates the DR-HE header, separates header keys per direction, tags the session blob, and makes the documented API usable end to end -- the responder side could not previously be driven from the published functions at all.

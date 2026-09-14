@@ -100,8 +100,10 @@ The publish sequence has multiple steps because the Hex tarball references binar
 1. Bump `VERSION`, `src/libsignal_protocol_nif.app.src`, `wrappers/elixir/mix.exs`, and `wrappers/gleam/gleam.toml`. Gleam generates its own application metadata.
 2. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. The push triggers `release.yml`, which builds the NIF on four platforms and creates a GitHub Release with the per-platform tarballs and `CHECKSUMS.txt` attached. Wait for this to finish (~10 min).
 3. Locally: `make hex-package`. Builds a source tarball at `_build/default/lib/libsignal_protocol_nif/hex/libsignal_protocol_nif-X.Y.Z.tar`. Its file allowlist lives in `src/libsignal_protocol_nif.app.src`, includes `VERSION` and the build hook, and excludes generated CMake files even after a local build.
-4. `rebar3 hex publish` from the repo root publishes the Erlang package. At install time, consumers' `c_src/build_nif.sh` (shipped in the tarball) fetches the matching binary from the GitHub Release created in step 2.
+4. `rebar3 hex publish package --repo hexpm` from the repo root publishes the Erlang package without a documentation provider. Specify `--repo hexpm` when using `HEX_API_KEY`: the plugin's implicit default-repository path does not apply the environment key. At install time, consumers' `c_src/build_nif.sh` (shipped in the tarball) fetches the matching binary from the GitHub Release created in step 2.
 5. Once the NIF version resolves on Hex, `make hex-package-gleam` exports the Gleam artifact to `wrappers/gleam/build/libsignal_protocol_gleam-X.Y.Z.tar` without publishing. `make publish-wrappers` publishes the Elixir and Gleam wrappers via `mix hex.publish` and `gleam publish`. Gleam reads dependencies from `gleam.toml` and packages the generated Erlang modules and application metadata; do not publish this wrapper with rebar3.
+
+To publish an existing release tag through CI, run `gh workflow run ci.yml --ref main -f tag=vX.Y.Z`. Validation and publishing check out that tag, not the current main branch; the consumer smoke tests resolve its version from Hex. Use this to recover a failed release publication without moving the tag. The publishing job uses `MIX_ENV=dev` so Elixir's documentation dependency is available.
 
 ## Reporting bugs
 
