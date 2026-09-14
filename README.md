@@ -14,7 +14,7 @@ Signal Protocol crypto for the BEAM. Erlang NIF, libsodium underneath, idiomatic
 ## What's implemented
 
 - Curve25519 ECDH, Ed25519 sign/verify
-- AES-256-GCM, ChaCha20-Poly1305 (AEAD)
+- AES-256-GCM (AEAD), AES-256-CBC + HMAC-SHA-256 (Signal DR cipher)
 - SHA-256, SHA-512, HMAC-SHA256, HKDF-SHA-256
 - X3DH key agreement (Alice + Bob sides)
 - Double Ratchet with header encryption (DR-HE)

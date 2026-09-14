@@ -18,7 +18,7 @@ end
 
 ## Modules
 
-- `LibsignalProtocol` -- `init/0`, `generate_identity_key_pair/0`, `create_session/2`
+- `LibsignalProtocol` -- `init/0`, `generate_identity_key_pair/0`
 - `SignalProtocol` -- keygen, X3DH, Double Ratchet, PreKeySignalMessage
 - `SignalProtocol.PreKeyBundle` -- bundle serialize / parse / verify
 

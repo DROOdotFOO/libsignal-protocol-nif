@@ -16,12 +16,6 @@ defmodule LibsignalProtocol do
     @nif.init()
   end
 
-  @spec create_session(binary(), binary()) :: {:ok, binary()} | {:error, atom()}
-  def create_session(local_private_key, remote_public_key)
-      when is_binary(local_private_key) and is_binary(remote_public_key) do
-    @nif.create_session(local_private_key, remote_public_key)
-  end
-
   @spec generate_identity_key_pair() :: {:ok, {binary(), binary()}} | {:error, atom()}
   def generate_identity_key_pair do
     @nif.generate_identity_key_pair()

@@ -31,21 +31,4 @@ defmodule LibsignalProtocolTest do
     end
   end
 
-  describe "session management" do
-    test "attempts to create session with key pair" do
-      # Generate test keys (32 bytes each for Curve25519)
-      private_key = :crypto.strong_rand_bytes(32)
-      public_key = :crypto.strong_rand_bytes(32)
-
-      case LibsignalProtocol.create_session(private_key, public_key) do
-        {:ok, session} ->
-          assert is_binary(session)
-          assert byte_size(session) > 0
-
-        {:error, reason} ->
-          IO.puts("Session creation failed (expected if NIF not loaded): #{inspect(reason)}")
-          assert is_atom(reason)
-      end
-    end
-  end
 end

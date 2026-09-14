@@ -12,7 +12,7 @@ All three wrappers call the same C NIF. Crypto behavior is identical. Difference
 | Test framework  | Common Test                            | ExUnit                                                               | gleeunit                                     |
 | Static analysis | Dialyzer                               | Dialyzer, Credo                                                      | Gleam compiler                               |
 
-The Elixir and Gleam wrappers expose the Signal Protocol surface (X3DH, Double Ratchet, PreKeySignalMessage) plus identity / pre-key generation. The simple ChaCha20-Poly1305 session API (`create_session/2`, `encrypt_message/2`, `decrypt_message/2`) is not exposed by the Gleam wrapper; Elixir still exposes `create_session/2` through `LibsignalProtocol` (slated for removal in 0.3). The real Signal flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`.
+Both wrappers expose the same surface as the NIF: identity / pre-key generation, X3DH, the Double Ratchet, and the PreKeySignalMessage envelope. The flow is `process_pre_key_bundle` -> `init_double_ratchet` -> `dr_encrypt_message`. (The static-key ChaCha20-Poly1305 "simple session" API was removed in 0.3.)
 
 For the lower-level primitives (`sha256/1`, `aes_gcm_encrypt/5`, `sign_data/2`, etc.) call `:signal_nif` directly from Elixir or `@external` to `signal_nif` from Gleam -- there are no wrapper modules around those.
 

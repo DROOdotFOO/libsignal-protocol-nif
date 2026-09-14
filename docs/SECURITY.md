@@ -40,7 +40,6 @@ If you're considering this for production, treat it as pre-audit and pin a speci
 | Chain advance            | HMAC-SHA-256; constants 0x02 for chain, 0x01 for message (Signal spec)                                                                                      |
 | DR cipher                | AES-256-CBC + HMAC-SHA-256 truncated to 8B; MAC checked before the body is decrypted                                                              |
 | DR-HE header             | AES-256-CBC + HMAC-SHA-256 truncated to 16B over `iv \|\| ct`; keys from HKDF(header_key, "WhisperHeader", L=64); tag checked before decrypt   |
-| Simple session AEAD      | ChaCha20-Poly1305 (libsodium IETF variant)                                                                                                                  |
 | AES-GCM in `signal_nif`  | libsodium `crypto_aead_aes256gcm_*`                                                                                                                         |
 | SHA-256 / SHA-512 / HMAC | libsodium                                                                                                                                                   |
 | CSPRNG                   | libsodium `randombytes_buf`                                                                                                                                 |
@@ -67,7 +66,7 @@ These differences mean DR sessions are not on-the-wire compatible with a stock l
 
 **In scope.** A passive on-path attacker who reads ciphertexts; a network attacker who can drop, reorder, or modify messages; bundle-substitution attempts (the Ed25519 signature on the signed pre-key blocks the published-bundle forgery that bit the 0.1 line, provided the embedder verifies the identity key out of band -- the bundle is self-describing and X3DH does not pin identities for you).
 
-**Partially in scope.** Replay: the Double Ratchet rejects a repeated message once its key has been consumed (`bad_mac`), but a `PreKeySignalMessage` can be replayed to re-derive the initial session unless the one-time pre-key it consumed has been deleted. The simple session API has no replay or direction binding at all (see `API.md`).
+**Partially in scope.** Replay: the Double Ratchet rejects a repeated message once its key has been consumed (`bad_mac`), but a `PreKeySignalMessage` can be replayed to re-derive the initial session unless the one-time pre-key it consumed has been deleted.
 
 **Out of scope.** A peer who logs plaintext after decrypt; a compromised device; an attacker with arbitrary memory read on the host process; an attacker who can replace the loaded `.so`; side-channel attacks on the host CPU.
 

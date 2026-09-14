@@ -19,7 +19,7 @@ Erlang / Elixir / Gleam application
    libsodium  (+ OpenSSL EVP for AES-CBC)
 ```
 
-Two NIFs ship because they have different audiences. `signal_nif` is stateless crypto -- callable from anywhere, no init. `libsignal_protocol_nif` is the full Signal Protocol module: identity keys, X3DH, the Double Ratchet, the PreKeySignalMessage envelope, plus a simple ChaCha20-Poly1305 session API for callers who already have a static shared key.
+Two NIFs ship because they have different audiences. `signal_nif` is stateless crypto -- callable from anywhere, no init. `libsignal_protocol_nif` is the full Signal Protocol module: identity keys, X3DH, the Double Ratchet, and the PreKeySignalMessage envelope.
 
 The `.erl` stubs use `-on_load(load_nif/0)` with a fallback path list. A failed load fails closed: the calling process gets `UndefinedFunctionError` rather than a silently-stubbed module.
 
@@ -85,7 +85,7 @@ The `message` field carries the full inner DR `SignalMessage` (version byte + ou
 
 **NIF, not port driver.** Signal's keygen and AEAD ops are small and frequent. The synchronous in-process call beats message-passing latency. Cost: a C-side crash takes the VM down, so each entry validates its inputs.
 
-**libsodium + OpenSSL 3.** libsodium covers Curve25519, Ed25519, ChaCha20-Poly1305, SHA-2, HKDF, HMAC. AES-256-CBC for the DR cipher comes from OpenSSL's `EVP_CIPHER` -- libsodium has no CBC. AES-256-GCM in `signal_nif` is libsodium's `crypto_aead_aes256gcm_*`. The OpenSSL dep showed up in 0.2 with the move to Signal-spec DR AEAD.
+**libsodium + OpenSSL 3.** libsodium covers Curve25519, Ed25519, SHA-2, HKDF, HMAC. AES-256-CBC for the DR cipher comes from OpenSSL's `EVP_CIPHER` -- libsodium has no CBC. AES-256-GCM in `signal_nif` is libsodium's `crypto_aead_aes256gcm_*`. The OpenSSL dep showed up in 0.2 with the move to Signal-spec DR AEAD.
 
 **Atom error vocabulary.** Every NIF returns `{ok, _} | {error, atom}`. Atoms are stable, cheap to pattern-match, and the Elixir wrapper mirrors them verbatim. The Gleam wrapper surfaces them as `Result(_, String)` because Gleam errors are strings.
 

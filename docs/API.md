@@ -85,25 +85,6 @@ ok = libsignal_protocol_nif:init().
 %% IdPriv. Keep SpkPriv for process_pre_key_bundle_bob/5.
 ```
 
-### Simple session (ChaCha20-Poly1305)
-
-A static-key AEAD session. Real Signal flows should use the Double Ratchet below; this is here for callers who already have a DH-derived shared key and want a one-shot encrypted channel. The Gleam wrapper does not expose it; the Elixir wrapper still does via `LibsignalProtocol.create_session/2`.
-
-```erlang
-{ok, Session} =
-    libsignal_protocol_nif:create_session(LocalPriv32, RemotePub32).
-%% Session: 64-byte binary; the first 32 bytes are the derived key.
-
-{ok, Envelope}  = libsignal_protocol_nif:encrypt_message(Session, Plaintext).
-%% Envelope: nonce(12) || ChaCha20-Poly1305(plaintext) || tag(16).
-
-{ok, Plaintext} = libsignal_protocol_nif:decrypt_message(Session, Envelope).
-```
-
-Both peers derive the same key and use it in both directions, there is no AAD, the nonce is 12 random bytes per message, and there is no counter. Consequences: a ciphertext one side produced also decrypts on that same side (no direction binding), messages can be replayed, and the random nonce has a birthday bound of about 2^32 messages per session. Use the Double Ratchet for anything beyond a one-shot exchange.
-
-Errors: `invalid_key_sizes` (inputs not 32 bytes), `key_agreement_failed`, `invalid_session` (session shorter than 32 bytes), `invalid_message` (envelope too short), `encryption_failed`, `decryption_failed`.
-
 ### X3DH
 
 Alice's side. The `Bundle` is the wire form Bob publishes:
@@ -218,7 +199,6 @@ Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom a
 | `signal_nif` HMAC | `hmac_failed` |
 | `signal_nif` AES-GCM | `invalid_parameters`, `aes_gcm_not_available`, `memory_allocation_failed`, `encryption_failed`, `decryption_failed` |
 | `generate_*_pre_key` | `key_generation_failed`, `invalid_identity_key_size`, `signature_failed` |
-| simple session | `invalid_key_sizes`, `key_agreement_failed`, `invalid_session`, `invalid_message`, `encryption_failed`, `decryption_failed` |
 | `process_pre_key_bundle/2` | `invalid_local_identity_key_size`, `invalid_bundle_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `signature_verification_failed`, `ephemeral_key_generation_failed`, `dh1_calculation_failed`, `dh2_calculation_failed`, `dh3_calculation_failed`, `dh4_calculation_failed`, `kdf_failed`, `memory_allocation_failed` |
 | `process_pre_key_bundle_bob/5` | `invalid_identity_priv_size`, `invalid_signed_pre_key_priv_size`, `invalid_one_time_pre_key_priv_size`, `invalid_remote_identity_pub_size`, `invalid_remote_ephemeral_pub_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `dh1_calculation_failed` .. `dh4_calculation_failed`, `kdf_failed` |
 | `dr_init/5` | `invalid_shared_secret_size`, `invalid_identity_pub_size`, `invalid_self_priv_size`, `identity_pub_conversion_failed`, `identity_priv_conversion_failed`, `key_generation_failed`, `dh_failed`, `kdf_failed` |

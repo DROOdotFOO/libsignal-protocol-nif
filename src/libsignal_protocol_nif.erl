@@ -1,8 +1,8 @@
 -module(libsignal_protocol_nif).
 
 -export([init/0, generate_identity_key_pair/0, generate_pre_key/1,
-         generate_signed_pre_key/2, create_session/2, process_pre_key_bundle/2,
-         process_pre_key_bundle_bob/5, encrypt_message/2, decrypt_message/2, dr_init/5,
+         generate_signed_pre_key/2, process_pre_key_bundle/2,
+         process_pre_key_bundle_bob/5, dr_init/5,
          dr_encrypt/2, dr_encrypt_prekey/3, dr_decrypt/2, pksm_decode/1]).
 
 -on_load load_nif/0.
@@ -47,11 +47,6 @@ generate_pre_key(_KeyId) ->
 generate_signed_pre_key(_IdentityKey, _KeyId) ->
     erlang:nif_error(nif_not_loaded).
 
--spec create_session(LocalPriv :: binary(), RemotePub :: binary()) ->
-                        {ok, Session :: binary()} | {error, atom()}.
-create_session(_LocalKey, _RemoteKey) ->
-    erlang:nif_error(nif_not_loaded).
-
 -spec process_pre_key_bundle(LocalIdentityPriv :: binary(), Bundle :: binary()) ->
                                 {ok, {SharedSecret :: binary(), EphemeralPub :: binary()}} |
                                 {error, atom()}.
@@ -78,16 +73,6 @@ process_pre_key_bundle_bob(_IdentityPriv,
                            _OneTimePreKeyPriv,
                            _RemoteIdentityPub,
                            _RemoteEphemeralPub) ->
-    erlang:nif_error(nif_not_loaded).
-
--spec encrypt_message(Session :: binary(), Message :: binary()) ->
-                         {ok, Encrypted :: binary()} | {error, atom()}.
-encrypt_message(_Session, _Message) ->
-    erlang:nif_error(nif_not_loaded).
-
--spec decrypt_message(Session :: binary(), Encrypted :: binary()) ->
-                         {ok, Plaintext :: binary()} | {error, atom()}.
-decrypt_message(_Session, _EncryptedMessage) ->
     erlang:nif_error(nif_not_loaded).
 
 % Double Ratchet functions.

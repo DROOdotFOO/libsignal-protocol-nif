@@ -67,11 +67,11 @@ C source under `c_src/` is flat, split by concern across files:
 - `dr_proto.{c,h}` — DR wire-format protobuf encode/decode (DrMessage header + DrEnvelope).
 - `dr_crypto.{c,h}` — HKDF-SHA-256, AES-256-CBC, HMAC MAC, per-message/per-header key derivation, trial-decrypt for DR-HE. `DR_MAC_LEN` lives here.
 - `dr_chain.{c,h}` — chain-key advance, message-key derive, MKSKIPPED cache, `dh_ratchet_recv`, `hk_is_nonzero`.
-- `session.c` / `session.h` — X3DH (Alice and Bob sides), `create_session`, ChaCha20-Poly1305 encrypt/decrypt for the simple session API. Calls `hkdf_sha256` from `dr_crypto.h`.
+- `session.c` / `session.h` — X3DH, Alice and Bob sides (`process_pre_key_bundle`, `process_pre_key_bundle_bob`). Calls `hkdf_sha256` from `dr_crypto.h`.
 - `pksm.{c,h}` — PreKeySignalMessage protobuf encode/decode (wraps Alice's first DR message).
 - `keys.{c,h}` — keypair generation helpers used by the NIF.
 
-The Erlang `libsignal_protocol_nif` module exposes session lifecycle (`create_session`, `process_pre_key_bundle`, `process_pre_key_bundle_bob`, `encrypt_message`, `decrypt_message`) and Double Ratchet (`dr_init`, `dr_encrypt`, `dr_encrypt_prekey`, `dr_decrypt`); `signal_nif` exposes the lower-level crypto primitives.
+The Erlang `libsignal_protocol_nif` module exposes X3DH (`process_pre_key_bundle`, `process_pre_key_bundle_bob`), Double Ratchet (`dr_init`, `dr_encrypt`, `dr_encrypt_prekey`, `dr_decrypt`), PKSM decode and key generation; `signal_nif` exposes the lower-level crypto primitives.
 
 Wrapper structure: `wrappers/elixir/lib/{libsignal_protocol,signal_protocol,pre_key_bundle}.ex` call into `:libsignal_protocol_nif` and pass its `{:ok, ...} | {:error, atom}` shapes through. `wrappers/gleam/src/*.gleam` wraps the same NIF with `Result` types (declared `Result(_, String)`, but most externals currently surface the raw atom — see `docs/CROSS_LANGUAGE_COMPARISON.md`). Both wrappers depend on the parent project producing `priv/libsignal_protocol_nif.so` — they do not build C themselves.
 
