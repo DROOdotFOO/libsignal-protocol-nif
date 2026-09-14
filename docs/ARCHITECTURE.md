@@ -47,7 +47,7 @@ Bob's side reconstructs the same 96 bytes from his stored privs plus values from
 
 ### Double Ratchet with header encryption
 
-The DR session struct (`double_ratchet_state_t` in `dr.h`) carries the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 64-slot MKSKIPPED LRU cache. Serialized blob is roughly 5.3 KB.
+The DR session struct (`double_ratchet_state_t` in `dr.h`) carries an 8-byte `magic || version || size` tag, the root key, send/receive chain keys, four DR-HE header keys (current and next, per direction), the local and remote identity pubs in X25519 form, and a 64-slot MKSKIPPED LRU cache. Serialized blob is roughly 5.3 KB. The struct layout *is* the persistence format; `dr_state_load`/`dr_state_store` in `dr.c` are the only places it crosses the NIF boundary, and load validates the tag and normalises every `bool` byte before anything reads them.
 
 Wire envelope:
 

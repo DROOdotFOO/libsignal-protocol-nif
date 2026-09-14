@@ -176,7 +176,9 @@ version_byte(0x33)
 
 `enc_header` is always exactly 80 bytes: a random IV, one 48-byte CBC block-triple (the inner header is 38..46 bytes), and a 16-byte truncated HMAC-SHA-256 over `iv || ct` under a MAC key derived alongside the cipher key from the header key. The receiver trial-opens it against the current receive header key, the next one, and each MKSKIPPED entry: the tag is checked first (constant time), so a header that does not authenticate under a key is never decrypted or parsed. Any other length is rejected as `malformed_message` before any key is used. MKSKIPPED is a 64-slot LRU; one `MAX_SKIP=32` budget covers a whole receive, including both sides of a DH ratchet (previous-chain tail plus new-chain prefix), so a single message can never insert more than 32 keys and never evicts the previous receive's keys.
 
-Errors: `invalid_session_size`, `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key decrypts the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
+Errors: `invalid_session_size` (blob is not this build's session length), `invalid_session` (right length, wrong magic/version tag -- a blob from another release or corrupt), `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key authenticates the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
+
+The session binary is opaque: pass it back unmodified. It opens with an 8-byte `magic || version || size` tag, so a blob produced by a different release (or any corrupted buffer) is rejected at the NIF boundary instead of being reinterpreted as key material.
 
 ### PreKeySignalMessage envelope
 
@@ -223,8 +225,8 @@ Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom a
 | `process_pre_key_bundle/2` | `invalid_local_identity_key_size`, `invalid_bundle_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `signature_verification_failed`, `ephemeral_key_generation_failed`, `dh1_calculation_failed`, `dh2_calculation_failed`, `dh3_calculation_failed`, `dh4_calculation_failed`, `kdf_failed`, `memory_allocation_failed` |
 | `process_pre_key_bundle_bob/5` | `invalid_identity_priv_size`, `invalid_signed_pre_key_priv_size`, `invalid_one_time_pre_key_priv_size`, `invalid_remote_identity_pub_size`, `invalid_remote_ephemeral_pub_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `dh1_calculation_failed` .. `dh4_calculation_failed`, `kdf_failed` |
 | `dr_init/5` | `invalid_shared_secret_size`, `invalid_identity_pub_size`, `invalid_self_priv_size`, `identity_pub_conversion_failed`, `identity_priv_conversion_failed`, `key_generation_failed`, `dh_failed`, `kdf_failed` |
-| `dr_encrypt/2`, `dr_encrypt_prekey/3` | `invalid_session_size`, `session_not_initialized`, `must_receive_first`, `kdf_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`, `pksm_encode_failed` |
-| `dr_decrypt/2` | `invalid_session_size`, `session_not_initialized`, `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac`, `too_many_skipped`, `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `mac_failed`, `memory_allocation_failed` |
+| `dr_encrypt/2`, `dr_encrypt_prekey/3` | `invalid_session_size`, `invalid_session`, `session_not_initialized`, `must_receive_first`, `kdf_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`, `pksm_encode_failed` |
+| `dr_decrypt/2` | `invalid_session_size`, `invalid_session`, `session_not_initialized`, `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac`, `too_many_skipped`, `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `mac_failed`, `memory_allocation_failed` |
 | `pksm_decode/1` | `malformed_message` |
 
 ## Sizes
@@ -241,7 +243,7 @@ Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom a
 | AES-GCM IV              | 12 bytes                                 |
 | AES-GCM tag             | 16 bytes                                 |
 | X3DH shared secret      | 96 bytes (root 32 \|\| seed_a 32 \|\| seed_b 32) |
-| DR session blob         | `sizeof(double_ratchet_state_t)`, ~5.3 KB; layout is compiler/ABI-specific, see `SECURITY.md` |
+| DR session blob         | `sizeof(double_ratchet_state_t)`, ~5.3 KB, 8-byte version tag at the head; layout is compiler/ABI-specific, see `SECURITY.md` |
 | DR MAC                  | 8 bytes (truncated HMAC-SHA-256)         |
 | DR `enc_header`         | 80 bytes (iv 16 \|\| AES-CBC 48 \|\| tag 16) |
 | PreKeyBundle wire       | 128 bytes (160 with OPK)                 |

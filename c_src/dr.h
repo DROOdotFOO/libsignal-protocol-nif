@@ -3,6 +3,7 @@
 
 #include <erl_nif.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <sodium.h>
 
 // Constants for Double Ratchet
@@ -31,8 +32,18 @@ typedef struct {
     bool occupied;
 } skipped_key_t;
 
-// Double Ratchet state structure
+// Double Ratchet state. The struct is copied verbatim into the session
+// binary handed back to Erlang, so its layout IS the persistence format:
+// reordering, resizing or adding a field is a blob-format break. The three
+// leading fields tag the blob so a stale one is rejected with
+// `invalid_session` instead of being reinterpreted as live key material.
+// Bump DR_STATE_VERSION on any layout change. The blob is not encrypted and
+// not authenticated -- see docs/SECURITY.md.
 typedef struct {
+    uint32_t magic;    // DR_STATE_MAGIC
+    uint16_t version;  // DR_STATE_VERSION
+    uint16_t size;     // sizeof(double_ratchet_state_t), guards ABI drift
+
     // Root chain key (32 bytes)
     unsigned char root_key[32];
 
@@ -87,6 +98,8 @@ typedef struct {
 } double_ratchet_state_t;
 
 #define DR_STATE_SIZE sizeof(double_ratchet_state_t)
+#define DR_STATE_MAGIC 0x44525331u  // "DRS1"
+#define DR_STATE_VERSION 1u
 
 
 ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);

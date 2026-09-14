@@ -13,9 +13,63 @@
 #define DR_SIGNAL_VERSION 3
 #define DR_VERSION_BYTE ((DR_SIGNAL_VERSION << 4) | DR_SIGNAL_VERSION)  // 0x33
 
+// ---------------------------------------------------------------------------
+// Session blob (de)serialization.
+//
+// The blob is a verbatim copy of double_ratchet_state_t. It is caller-held
+// and unauthenticated, so load validates everything a later read depends on:
+// the size, the magic/version tag, and the boolean bytes (a `bool` holding
+// anything but 0 or 1 is undefined behaviour to read). Every array index
+// derived from the blob is already bounded by its own loop, so this is about
+// rejecting stale or corrupt blobs loudly rather than containing them.
+// ---------------------------------------------------------------------------
+
+// Returns NULL on success, else the error atom name: "invalid_session_size"
+// when the blob is not this build's blob size at all, "invalid_session" when
+// it is the right size but carries the wrong tag (a blob from another
+// version, or garbage).
+static const char *dr_state_load(const ErlNifBinary *bin,
+                                 double_ratchet_state_t *out) {
+    if (bin->size != DR_STATE_SIZE) return "invalid_session_size";
+    memcpy(out, bin->data, DR_STATE_SIZE);
+    if (out->magic != DR_STATE_MAGIC ||
+        out->version != DR_STATE_VERSION ||
+        out->size != (uint16_t)DR_STATE_SIZE) {
+        sodium_memzero(out, sizeof(*out));
+        return "invalid_session";
+    }
+    // Normalise the bool bytes: reading a bool whose object representation
+    // is neither 0 nor 1 is undefined, so a corrupt blob must not reach the
+    // branches that test them.
+    const unsigned char *raw = bin->data;
+    out->initialized =
+        raw[offsetof(double_ratchet_state_t, initialized)] != 0;
+    out->dh_recv_initialized =
+        raw[offsetof(double_ratchet_state_t, dh_recv_initialized)] != 0;
+    for (size_t i = 0; i < MAX_SKIPPED_KEYS; i++) {
+        size_t off = offsetof(double_ratchet_state_t, mkskipped) +
+                     i * sizeof(skipped_key_t) +
+                     offsetof(skipped_key_t, occupied);
+        out->mkskipped[i].occupied = raw[off] != 0;
+    }
+    return NULL;
+}
+
+// Emit `state` as a fresh session binary, stamping the tag fields. The
+// caller still owns zeroing its stack copy.
+static ERL_NIF_TERM dr_state_store(ErlNifEnv *env, double_ratchet_state_t *state) {
+    state->magic = DR_STATE_MAGIC;
+    state->version = DR_STATE_VERSION;
+    state->size = (uint16_t)DR_STATE_SIZE;
+    ERL_NIF_TERM term;
+    unsigned char *data = enif_make_new_binary(env, DR_STATE_SIZE, &term);
+    memcpy(data, state, DR_STATE_SIZE);
+    return term;
+}
+
 // Double Ratchet init (per Signal DR spec section 3.3, with the deviations
 // noted in docs/SECURITY.md).
-// Args: SharedSecret(96 = X3DH SK(64) || header-key seed(32)),
+// Args: SharedSecret(96 = root(32) || header-key seeds(2 * 32)),
 //       LocalIdentityPub(32), RemoteIdentityPub(32),
 //       SelfIdentityPriv(64 for Bob, <<>> for Alice), IsAlice(int).
 // LocalIdentityPub and RemoteIdentityPub are Ed25519 pubs; they are converted
@@ -138,10 +192,7 @@ cleanup:
                                enif_make_atom(env, err));
     }
 
-    ERL_NIF_TERM dr_session_term;
-    unsigned char *dr_session_data =
-        enif_make_new_binary(env, DR_STATE_SIZE, &dr_session_term);
-    memcpy(dr_session_data, &state, DR_STATE_SIZE);
+    ERL_NIF_TERM dr_session_term = dr_state_store(env, &state);
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"), dr_session_term);
@@ -259,13 +310,12 @@ ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    if (dr_session.size != DR_STATE_SIZE) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "invalid_session_size"));
-    }
-
     double_ratchet_state_t state;
-    memcpy(&state, dr_session.data, DR_STATE_SIZE);
+    const char *load_err = dr_state_load(&dr_session, &state);
+    if (load_err) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, load_err));
+    }
 
     unsigned char *wire = NULL;
     size_t wire_len = 0;
@@ -282,10 +332,7 @@ ERL_NIF_TERM dr_encrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     memcpy(encrypted_data, wire, wire_len);
     enif_free(wire);
 
-    ERL_NIF_TERM updated_session_term;
-    unsigned char *updated_session_data =
-        enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
-    memcpy(updated_session_data, &state, DR_STATE_SIZE);
+    ERL_NIF_TERM updated_session_term = dr_state_store(env, &state);
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
@@ -347,11 +394,6 @@ ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
         return enif_make_badarg(env);
     }
 
-    if (dr_session.size != DR_STATE_SIZE) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "invalid_session_size"));
-    }
-
     const char *err = NULL;
     double_ratchet_state_t state;
     unsigned char *inner_wire = NULL;
@@ -360,7 +402,11 @@ ERL_NIF_TERM dr_encrypt_prekey(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     int pksm_len = -1;
     ERL_NIF_TERM wire_term = 0;
 
-    memcpy(&state, dr_session.data, DR_STATE_SIZE);
+    err = dr_state_load(&dr_session, &state);
+    if (err) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
 
     err = dr_encrypt_core(&state, plaintext.data, plaintext.size,
                           &inner_wire, &inner_wire_len);
@@ -398,10 +444,7 @@ cleanup:
                                enif_make_atom(env, err));
     }
 
-    ERL_NIF_TERM updated_session_term;
-    unsigned char *updated_session_data =
-        enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
-    memcpy(updated_session_data, &state, DR_STATE_SIZE);
+    ERL_NIF_TERM updated_session_term = dr_state_store(env, &state);
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
@@ -431,11 +474,6 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    if (dr_session.size != DR_STATE_SIZE) {
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                               enif_make_atom(env, "invalid_session_size"));
-    }
-
     const char *err = NULL;
     double_ratchet_state_t state;
     unsigned char header_plain[DR_HEADER_PLAIN_CAP];
@@ -447,7 +485,11 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     size_t body_ct_len = 0;
     ERL_NIF_TERM decrypted_term = 0;
 
-    memcpy(&state, dr_session.data, DR_STATE_SIZE);
+    err = dr_state_load(&dr_session, &state);
+    if (err) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                               enif_make_atom(env, err));
+    }
 
     if (!state.initialized) { err = "session_not_initialized"; goto cleanup; }
 
@@ -611,10 +653,7 @@ cleanup:
                                enif_make_atom(env, err));
     }
 
-    ERL_NIF_TERM updated_session_term;
-    unsigned char *updated_session_data =
-        enif_make_new_binary(env, DR_STATE_SIZE, &updated_session_term);
-    memcpy(updated_session_data, &state, DR_STATE_SIZE);
+    ERL_NIF_TERM updated_session_term = dr_state_store(env, &state);
     sodium_memzero(&state, sizeof(state));
 
     return enif_make_tuple2(env, enif_make_atom(env, "ok"),
