@@ -10,7 +10,7 @@ For build steps and the file tree, see [CLAUDE.md](../CLAUDE.md). For the call-l
 Erlang / Elixir / Gleam application
             |
    *.erl NIF stub modules                src/{signal_nif,libsignal_protocol_nif}.erl
-            |  on_load: search priv/, _build/.../priv/
+            |  on_load: libsignal_nif_loader -> code:priv_dir/1, then priv/
    C NIF entry + dispatch                c_src/{signal_nif,libsignal_protocol_nif}.c
             |
    protocol pieces                       c_src/{dr,dr_chain,dr_crypto,dr_proto,pksm,
@@ -21,7 +21,7 @@ Erlang / Elixir / Gleam application
 
 Two NIFs ship because they have different audiences. `signal_nif` is stateless crypto -- callable from anywhere, no init. `libsignal_protocol_nif` is the full Signal Protocol module: identity keys, X3DH, the Double Ratchet, and the PreKeySignalMessage envelope.
 
-The `.erl` stubs use `-on_load(load_nif/0)` with a fallback path list. A failed load fails closed: the calling process gets `UndefinedFunctionError` rather than a silently-stubbed module.
+Both `.erl` stubs use `-on_load(load_nif/0)` and delegate path resolution to `src/libsignal_nif_loader.erl`. A failed load fails closed: the module refuses to load and the calling process gets `UndefinedFunctionError` rather than silently-stubbed crypto.
 
 ## Protocol surface
 
@@ -35,7 +35,7 @@ Pre-keys are X25519. Signed pre-keys are signed under the identity key. The publ
 id_pub(32) || spk_pub(32) || signature(64) [|| opk_pub(32)]
 ```
 
-The wrappers serialize a higher-level versioned bundle for storage. The NIF only sees this raw form.
+Both generators hand back the private half; the publisher keeps it to complete X3DH when someone consumes the bundle. The Elixir and Gleam wrappers model the bundle as a struct/record and serialize it to exactly these bytes -- there is no second, wrapper-level format.
 
 ### X3DH
 
@@ -89,7 +89,7 @@ The `message` field carries the full inner DR `SignalMessage` (version byte + ou
 
 **Atom error vocabulary.** Every NIF returns `{ok, _} | {error, atom}`. Atoms are stable, cheap to pattern-match, and the Elixir wrapper mirrors them verbatim. The Gleam wrapper surfaces them as `Result(_, String)` because Gleam errors are strings.
 
-**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they are loaded independently (the Elixir wrapper never loads `signal_nif`), so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
+**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they load independently, so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
 
 **Fail closed on load.** A failed `load_nif/0` returns `{error, _}` from `-on_load` so the module refuses to load. Prior to 0.2 a load failure printed a warning and returned `ok`, leaving stubs in place that would silently no-op cryptographic work. Removed.
 

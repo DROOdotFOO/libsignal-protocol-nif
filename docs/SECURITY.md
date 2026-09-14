@@ -57,10 +57,11 @@ A forged or reflected header therefore costs the receiver one HKDF and one HMAC 
 - HKDF info strings for the DR root KDF (`"DR-RK"`) and X3DH KDF (`"X3DH-Signal"`) differ from Signal's `"WhisperRatchet"` / `"WhisperText"`. The structure of the HKDF call is identical; only the info bytes differ. The per-message AEAD KDF uses the canonical `"WhisperMessageKeys"`.
 - **Bob's initial ratchet key is his identity key**, not his signed pre-key: `dr_init/5` converts Bob's Ed25519 identity secret to X25519 and uses it as `dh_send_private`; Alice uses Bob's converted identity pub as her first `dh_recv_public`. The spec uses `SPK_B` so that SPK rotation gives forward secrecy for the first receiving chain and keeps the long-term key out of the ratchet. Here the first DH ratchet step on Bob's side is `DH(IK_B, EK_A')`. The root key still comes from the full X3DH, so this does not weaken the session's confidentiality against a passive observer; it does mean compromise of `IK_B` alone exposes the first chain's DH contribution.
 - The DR-HE header MAC is HMAC-SHA-256 truncated to 16 bytes over `iv || ct` (encrypt-then-MAC with a separately derived key) rather than a single AEAD primitive; the security argument is the same as for the body.
+- The PreKeySignalMessage `identity_key` field carries the sender's **Ed25519** identity pub. libsignal puts the X25519 (DJB) form there, but that form cannot be converted back, and both `process_pre_key_bundle_bob/5` and `dr_init/5` need Ed25519 -- with the X25519 form the recipient could not bootstrap from the envelope at all. Changed in 0.3.
 - The PreKeySignalMessage version byte is `0x33` matching `(3<<4)|3`, the Signal Protocol convention.
 - X3DH F-prefix, chain-key constants, MAC truncation length all match the Signal spec.
 
-These differences mean DR sessions are not on-the-wire compatible with a stock libsignal client -- they're compatible at the structural level, but a peer would need to match the info strings and the ratchet-key choice.
+These differences mean DR sessions are not on-the-wire compatible with a stock libsignal client -- they're compatible at the structural level, but a peer would need to match the info strings, the ratchet-key choice, the authenticated header format, and the PKSM identity-key encoding.
 
 ## Threat model
 
