@@ -78,4 +78,3 @@ aes_gcm_encrypt(_Key, _IV, _Plaintext, _AAD, _TagLen) ->
                          {ok, Plaintext :: binary()} | {error, atom()}.
 aes_gcm_decrypt(_Key, _IV, _Ciphertext, _AAD, _Tag, _PlaintextLen) ->
     erlang:nif_error(nif_not_loaded).
-

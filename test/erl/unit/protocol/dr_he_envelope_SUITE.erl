@@ -152,14 +152,18 @@ forged_wire(HeaderLen) ->
     Header = rand:bytes(HeaderLen),
     Body = rand:bytes(16),
     <<16#33,
-      16#0A, (varint(HeaderLen))/binary, Header/binary,
-      16#12, (varint(16))/binary, Body/binary,
+      16#0A,
+      (varint(HeaderLen))/binary,
+      Header/binary,
+      16#12,
+      (varint(16))/binary,
+      Body/binary,
       0:64>>.
 
 varint(N) when N < 16#80 ->
     <<N>>;
 varint(N) ->
-    <<(16#80 bor (N band 16#7F)), (varint(N bsr 7))/binary>>.
+    <<(16#80 bor N band 16#7F), (varint(N bsr 7))/binary>>.
 
 %% Brute-force longest common substring between two binaries. Both inputs
 %% are short (< 200B in this suite), so O(n*m) is fine.

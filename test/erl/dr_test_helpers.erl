@@ -21,15 +21,15 @@ nif_or_skip(Config, Seed) ->
 %% one whose -on_load failed (Why is on_load_failure when the .so is missing).
 -spec nifs_loaded() -> ok | {error, {module(), term()}}.
 nifs_loaded() ->
-    lists:foldl(fun(Mod, ok) ->
-                       case code:ensure_loaded(Mod) of
-                           {module, Mod} ->
-                               ok;
-                           {error, Why} ->
-                               {error, {Mod, Why}}
-                       end;
-                   (_Mod, Err) ->
-                       Err
+    lists:foldl(fun (Mod, ok) ->
+                        case code:ensure_loaded(Mod) of
+                            {module, Mod} ->
+                                ok;
+                            {error, Why} ->
+                                {error, {Mod, Why}}
+                        end;
+                    (_Mod, Err) ->
+                        Err
                 end,
                 ok,
                 [signal_nif, libsignal_protocol_nif]).
