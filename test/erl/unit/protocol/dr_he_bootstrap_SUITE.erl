@@ -65,14 +65,19 @@ accepts_96_byte_shared_secret(_Config) ->
     ?assertMatch({ok, _}, libsignal_protocol_nif:dr_init(SS, BobPub, AlicePub, BobPriv, 0)).
 
 %% Pin the DR state binary size on this build target so unintended struct
-%% growth (extra fields, padding) is caught at test time. 7740 bytes equals
-%% the 0.2.0 struct (2836: 2708 + 4 * 32 header-key fields), plus 64 more
-%% MKSKIPPED slots of 76 bytes each (MAX_SKIPPED_KEYS went 32 -> 3 * MAX_SKIP
-%% so a worst-case two-chain receive cannot evict the previous receive's
-%% keys), plus the 8-byte magic/version/size tag at the head, plus the
-%% 32-byte Ed25519 local identity pub carried for the PKSM envelope.
-%% Padding/alignment is platform-dependent; if this fails on a new target,
-%% confirm the delta matches a known struct change before updating.
+%% growth (extra fields, padding) is caught at test time. The blob is a
+%% verbatim copy of double_ratchet_state_t, so its size is:
+%%
+%%   8  magic || version || size tag
+%%   32 root key + 2 * 32 chain keys + 2 * 4 message numbers
+%%   32 dh_send_private + 2 * 32 dh public keys
+%%   2 * 32 identity pubs (X25519) + 32 identity pub (Ed25519, for PKSM)
+%%   4 * 32 header keys (current and next, per direction)
+%%   4 prev_send_length + 2 bools + padding
+%%   96 MKSKIPPED slots of 76 bytes (3 * MAX_SKIP) + 4 LRU clock
+%%
+%% Padding and alignment are platform-dependent; if this fails on a new
+%% target, confirm the delta matches a known struct change before updating.
 dr_state_size_pinned(_Config) ->
     {AlicePub, _AlicePriv, BobPub, _BobPriv} = fresh_identities(),
     SS = rand:bytes(96),

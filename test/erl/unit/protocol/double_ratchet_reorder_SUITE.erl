@@ -107,13 +107,12 @@ skip_bound_rejected(Config) ->
 
 %% MAX_SKIP is a per-chain bound (Signal spec), so one receive that crosses a
 %% DH ratchet may skip up to MAX_SKIP on the old chain *and* MAX_SKIP on the
-%% new one, and every key it banks must later drain. 0.3.0 briefly charged
-%% both sides against a single shared budget, which rejected ordinary
-%% reorders that 0.2 accepted -- e.g. PN=30 with 1 received plus N=10 is 39
-%% against a 32 budget, while each chain is individually well inside the cap.
+%% new one, and every key it banks must later drain. Charging both sides
+%% against a single shared budget would reject ordinary reorders: 29 skipped
+%% on the old chain plus 10 on the new is 39, over a 32 budget, while each
+%% chain is individually well inside the cap.
 skip_budget_is_per_chain(Config) ->
-    %% 29 skipped on the old chain + 10 on the new: over a shared budget,
-    %% inside the per-chain one.
+    %% 29 skipped on the old chain + 10 on the new.
     {Bob, OldTail, NewPrefix, {LastMsg, LastCT}} =
         ratchet_with_skips(parties(Config), 30, 11),
     {ok, {LastMsg, Bob1}} = libsignal_protocol_nif:dr_decrypt(Bob, LastCT),

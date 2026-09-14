@@ -1,14 +1,14 @@
 -module(dr_he_envelope_SUITE).
 
-%% Pins the DR-HE wire-format observable: the counter, previous_counter, and
-%% ratchet_key are no longer visible on the wire because the inner header
+%% Pins the DR-HE wire-format observables: counter, previous_counter and
+%% ratchet_key are not visible on the wire, because the inner header
 %% protobuf is encrypted under header_key_send before being placed in the
-%% outer envelope.
+%% outer envelope; and a header must authenticate under a candidate header
+%% key before any of it is decrypted or parsed.
 %%
-%% The existing reorder + roundtrip + PKSM suites already prove the
-%% encrypt/decrypt loop still composes correctly (so trial-decrypt + MAC
-%% verify are functionally sound). This suite locks the actual traffic-
-%% analysis property that motivated DR-HE.
+%% The reorder, roundtrip and PKSM suites cover the encrypt/decrypt loop
+%% composing correctly. This suite covers the traffic-analysis property
+%% DR-HE exists for, and the receive path's structural rejections.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -86,10 +86,10 @@ wire_hides_ratchet_key(Config) ->
     {ok, {CT0, Alice1}} = libsignal_protocol_nif:dr_encrypt(Alice0, Plain),
     {ok, {CT1, _Alice2}} = libsignal_protocol_nif:dr_encrypt(Alice1, Plain),
     Common = longest_common_substring(CT0, CT1),
-    %% Pre-DR-HE the cleartext ratchet_key alone was a 32B common substring.
-    %% With DR-HE the only structurally-invariant bytes between two
-    %% consecutive messages are the outer protobuf framing tags +
-    %% length varints -- well under 32 bytes.
+    %% The only structurally-invariant bytes between two consecutive
+    %% messages are the outer protobuf framing tags + length varints --
+    %% well under 32 bytes. A cleartext ratchet_key would show up here as
+    %% a 32-byte common substring.
     ?assert(byte_size(Common) < 32).
 
 %% Flip every bit of the 80-byte enc_header in turn. The header carries its
@@ -113,10 +113,8 @@ tampered_envelope_rejected(Config) ->
 %% A message must never authenticate under its own sender's receive keys.
 %% Header keys are seeded per direction from distinct halves of the X3DH
 %% output, so reflecting Alice's wire back to Alice finds no candidate header
-%% key and stops at bad_mac. Pre-fix both directions shared one seed: the
-%% header opened under Alice's next_header_key_recv, the receiver ran the DH
-%% ratchet and then tried to skip N=MAX_SKIP+1 keys, surfacing
-%% too_many_skipped -- unauthenticated work driven by a reflected message.
+%% key and stops at bad_mac -- without running the DH ratchet or skipping any
+%% message keys, which would be unauthenticated work driven by the reflection.
 reflected_message_rejected(Config) ->
     Alice0 = ?config(alice, Config),
     {AliceN, CT} =
@@ -152,10 +150,9 @@ malformed_outer_envelope_rejected(Config) ->
 %% A legitimate enc_header is always iv(16) || AES-CBC(48) || tag(16) = 80B.
 %% The receiver trial-opens enc_header into a fixed-size stack buffer
 %% *before* the outer MAC is checked, so any other length must be rejected
-%% structurally -- including the 0.2 size (64), block-aligned sizes the
-%% original `>= 32 && % 16 == 0` check let through (48, 96, ...) and sizes
-%% it rejected for the wrong reason (0, 16, 47, 79, 81). The 4 KB case
-%% smashed the NIF stack before the pin existed.
+%% structurally: block-aligned sizes a `>= 32 && % 16 == 0` check would let
+%% through (48, 64, 96, and multi-KB values that overrun the buffer), and
+%% sizes such a check rejects only incidentally (0, 16, 47, 79, 81).
 wrong_size_enc_header_rejected(Config) ->
     Bob = ?config(bob, Config),
     lists:foreach(fun(HeaderLen) ->
