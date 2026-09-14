@@ -15,14 +15,16 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2]).
 -export([wire_hides_counter/1, wire_hides_ratchet_key/1, tampered_envelope_rejected/1,
-         wrong_session_cannot_decrypt/1, malformed_outer_envelope_rejected/1]).
+         wrong_session_cannot_decrypt/1, malformed_outer_envelope_rejected/1,
+         wrong_size_enc_header_rejected/1]).
 
 all() ->
     [wire_hides_counter,
      wire_hides_ratchet_key,
      tampered_envelope_rejected,
      wrong_session_cannot_decrypt,
-     malformed_outer_envelope_rejected].
+     malformed_outer_envelope_rejected,
+     wrong_size_enc_header_rejected].
 
 init_per_suite(Config) ->
     dr_test_helpers:nif_or_skip(Config, {2, 3, 5}).
@@ -117,6 +119,22 @@ malformed_outer_envelope_rejected(Config) ->
     Bogus = <<16#33, 0:64>>,
     ?assertMatch({error, malformed_message}, libsignal_protocol_nif:dr_decrypt(Bob, Bogus)).
 
+%% A legitimate enc_header is always iv(16) || 48B of AES-CBC output = 64B.
+%% The receiver trial-decrypts enc_header into a fixed-size stack buffer
+%% *before* the outer MAC is checked, so any other length must be rejected
+%% structurally -- including sizes the old `>= 32 && % 16 == 0` check let
+%% through (48, 80, ...) and sizes it rejected for the wrong reason (0, 16,
+%% 47, 63, 65). Pre-fix, the 4 KB case smashed the NIF stack.
+wrong_size_enc_header_rejected(Config) ->
+    Bob = ?config(bob, Config),
+    lists:foreach(fun(HeaderLen) ->
+                     Wire = forged_wire(HeaderLen),
+                     ?assertEqual({error, malformed_message},
+                                  libsignal_protocol_nif:dr_decrypt(Bob, Wire),
+                                  {enc_header_len, HeaderLen})
+                  end,
+                  [0, 16, 47, 48, 63, 65, 80, 112, 16 + 4096, 16 + 65536]).
+
 %% ============================================================================
 %% Helpers
 %% ============================================================================
@@ -127,6 +145,25 @@ parties(Config) ->
 flip_bit(Bin, Pos) when Pos < byte_size(Bin) ->
     <<Pre:Pos/binary, Byte:8, Rest/binary>> = Bin,
     <<Pre/binary, (Byte bxor 1):8, Rest/binary>>.
+
+%% version(1) || protobuf{1: enc_header, 2: ciphertext} || mac(8) with an
+%% arbitrary enc_header length and a minimal 16B body ciphertext.
+forged_wire(HeaderLen) ->
+    Header = rand:bytes(HeaderLen),
+    Body = rand:bytes(16),
+    <<16#33,
+      16#0A,
+      (varint(HeaderLen))/binary,
+      Header/binary,
+      16#12,
+      (varint(16))/binary,
+      Body/binary,
+      0:64>>.
+
+varint(N) when N < 16#80 ->
+    <<N>>;
+varint(N) ->
+    <<(16#80 bor N band 16#7F), (varint(N bsr 7))/binary>>.
 
 %% Brute-force longest common substring between two binaries. Both inputs
 %% are short (< 200B in this suite), so O(n*m) is fine.

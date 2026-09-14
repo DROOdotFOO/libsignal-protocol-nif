@@ -3,15 +3,13 @@
 #include <limits.h>
 #include <sodium.h>
 #include <openssl/evp.h>
-#include <openssl/crypto.h>
-#include <openssl/params.h>
 #include "dr.h"
 #include "dr_crypto.h"
 #include "dr_proto.h"
 
 // HKDF-SHA-256 (RFC 5869). Caller provides salt (use zero-filled 32 bytes if
 // none), input keying material (IKM), info, and the desired output length.
-// We produce up to N=ceil(L/32) HMAC outputs; with L<=64 this is at most 2.
+// Produces N=ceil(L/32) HMAC blocks; callers request up to L=96 (three).
 int hkdf_sha256(unsigned char *output, size_t output_len,
                 const unsigned char *salt, size_t salt_len,
                 const unsigned char *ikm, size_t ikm_len,
@@ -124,6 +122,7 @@ int dr_aes_cbc_encrypt(unsigned char *out_buf, size_t *out_len,
     if (!ctx) return -1;
     int ok = 0;
     int len1 = 0, len2 = 0;
+    if (plaintext_len > INT_MAX) goto done;
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) goto done;
     if (EVP_EncryptUpdate(ctx, out_buf, &len1,
                           plaintext, (int)plaintext_len) != 1) goto done;
@@ -145,6 +144,7 @@ int dr_aes_cbc_decrypt(unsigned char *out_buf, size_t *out_len,
     if (!ctx) return -1;
     int ok = 0;
     int len1 = 0, len2 = 0;
+    if (ciphertext_len > INT_MAX) goto done;
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) goto done;
     if (EVP_DecryptUpdate(ctx, out_buf, &len1,
                           ciphertext, (int)ciphertext_len) != 1) goto done;
@@ -161,21 +161,27 @@ done:
 // encrypt and shipped with the ciphertext so the same header_key can be
 // reused safely across every message in a chain.
 //
+// enc_header_len is attacker-controlled (it comes straight out of the outer
+// envelope protobuf, before the MAC is checked), so it is pinned to the one
+// length a legitimate sender can produce and additionally bounded by the
+// caller's output capacity before any cipher call. EVP_DecryptUpdate writes
+// every block but the last regardless of key, so a size check after the
+// fact would be too late.
+//
 // On a valid PKCS#7 unpad AND a successful inner-header protobuf parse
 // (3 expected fields, 32B ratchet_key), fills *out and returns 0. Returns
 // -1 on size mismatch, AES-CBC failure, padding error, or malformed
 // inner protobuf.
-//
-// out_plain must have capacity >= enc_header_len - 16.
 int dr_try_decrypt_header(unsigned char *out_plain,
+                          size_t out_plain_cap,
                           size_t *out_plain_len,
                           dr_message_t *out_msg,
                           const unsigned char *enc_header,
                           size_t enc_header_len,
                           const unsigned char *header_key) {
-    if (enc_header_len < 16 + 16) return -1;
-    size_t ct_len = enc_header_len - 16;
-    if ((ct_len % 16) != 0) return -1;
+    if (enc_header_len != DR_ENC_HEADER_LEN) return -1;
+    size_t ct_len = enc_header_len - DR_HEADER_IV_LEN;
+    if (ct_len + 16 > out_plain_cap) return -1;
     const unsigned char *iv = enc_header;
     const unsigned char *ciphertext = enc_header + 16;
 
@@ -245,39 +251,25 @@ int dr_try_decrypt_header(unsigned char *out_plain,
 
 // Compute the Signal-spec MAC: HMAC-SHA-256(mac_key, sender_id_pub(32) ||
 // receiver_id_pub(32) || version(1) || serialized_message), truncated to the
-// first 8 bytes. Uses the OpenSSL 3 EVP_MAC API; the legacy HMAC_*
-// interface is deprecated.
+// first 8 bytes. libsodium's streaming HMAC is used (same primitive hkdf_sha256
+// already relies on); it needs no per-call algorithm fetch or provider lock,
+// unlike OpenSSL's EVP_MAC API.
 int dr_compute_mac(unsigned char *out_mac,
                    const unsigned char *mac_key,
                    const unsigned char *sender_id_pub,
                    const unsigned char *receiver_id_pub,
                    unsigned char version,
                    const unsigned char *serialized, size_t serialized_len) {
-    unsigned char full_mac[32];
-    size_t full_mac_len = 0;
-    EVP_MAC *mac_algo = EVP_MAC_fetch(NULL, "HMAC", NULL);
-    if (!mac_algo) return -1;
-    EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac_algo);
-    int ok = 0;
-    if (!ctx) goto done;
-    char sha256[] = "SHA256";  // OSSL_PARAM_construct_utf8_string wants char *
-    OSSL_PARAM params[] = {
-        OSSL_PARAM_construct_utf8_string("digest", sha256, 0),
-        OSSL_PARAM_construct_end()
-    };
-    if (EVP_MAC_init(ctx, mac_key, 32, params) != 1) goto done;
-    if (EVP_MAC_update(ctx, sender_id_pub, 32) != 1) goto done;
-    if (EVP_MAC_update(ctx, receiver_id_pub, 32) != 1) goto done;
-    if (EVP_MAC_update(ctx, &version, 1) != 1) goto done;
-    if (EVP_MAC_update(ctx, serialized, serialized_len) != 1) goto done;
-    if (EVP_MAC_final(ctx, full_mac, &full_mac_len, sizeof(full_mac)) != 1)
-        goto done;
-    if (full_mac_len < DR_MAC_LEN) goto done;
-    memcpy(out_mac, full_mac, DR_MAC_LEN);
-    ok = 1;
-done:
-    EVP_MAC_CTX_free(ctx);
-    EVP_MAC_free(mac_algo);
+    unsigned char full_mac[crypto_auth_hmacsha256_BYTES];
+    crypto_auth_hmacsha256_state st;
+    int ok = crypto_auth_hmacsha256_init(&st, mac_key, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, sender_id_pub, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, receiver_id_pub, 32) == 0 &&
+             crypto_auth_hmacsha256_update(&st, &version, 1) == 0 &&
+             crypto_auth_hmacsha256_update(&st, serialized, serialized_len) == 0 &&
+             crypto_auth_hmacsha256_final(&st, full_mac) == 0;
+    if (ok) memcpy(out_mac, full_mac, DR_MAC_LEN);
+    sodium_memzero(&st, sizeof(st));
     sodium_memzero(full_mac, sizeof(full_mac));
     return ok ? 0 : -1;
 }

@@ -54,10 +54,13 @@ typedef struct {
     unsigned char local_identity_pub[crypto_box_PUBLICKEYBYTES];
     unsigned char remote_identity_pub[crypto_box_PUBLICKEYBYTES];
 
-    // DR-HE (header encryption) keys. HKs/HKr authenticate+encrypt the
-    // current chain's headers; NHKs/NHKr are pre-derived for the *next*
-    // DH ratchet step and rotate into HKs/HKr at that step. Seeded from
-    // X3DH at dr_init; not yet consumed on the wire (state plumbing only).
+    // DR-HE (header encryption) keys. HKs/HKr encrypt the current chain's
+    // headers (AES-256-CBC under HKDF(hk, "WhisperHeader"); no header MAC);
+    // NHKs/NHKr are pre-derived for the *next* DH ratchet step and rotate
+    // into HKs/HKr at that step. Both NHKs and NHKr are seeded from the same
+    // 32 bytes of the X3DH output at dr_init (see docs/SECURITY.md, "Known
+    // deviations"). Zero until the first rotation; hk_is_nonzero() filters
+    // the never-seeded HKr on Alice's side.
     unsigned char header_key_send[DR_HEADER_KEY_SIZE];
     unsigned char header_key_recv[DR_HEADER_KEY_SIZE];
     unsigned char next_header_key_send[DR_HEADER_KEY_SIZE];

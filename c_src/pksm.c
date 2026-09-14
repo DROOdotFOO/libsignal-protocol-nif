@@ -1,38 +1,8 @@
 #include "pksm.h"
+#include "dr_proto.h"
 #include <string.h>
 
 #define PKSM_VERSION_BYTE 0x33
-
-// Encode an unsigned 64-bit value as protobuf varint. Buffer must have at
-// least 10 bytes. Returns bytes written.
-static size_t pb_encode_varint(unsigned char *out, uint64_t value) {
-    size_t n = 0;
-    while (value >= 0x80) {
-        out[n++] = (unsigned char)((value & 0x7F) | 0x80);
-        value >>= 7;
-    }
-    out[n++] = (unsigned char)(value & 0x7F);
-    return n;
-}
-
-// Decode a protobuf varint. Sets *value and *consumed. Returns 0 on success,
-// -1 on truncation or overflow (>10 bytes).
-static int pb_decode_varint(const unsigned char *in, size_t in_len,
-                            uint64_t *value, size_t *consumed) {
-    uint64_t v = 0;
-    size_t shift = 0;
-    for (size_t i = 0; i < in_len; i++) {
-        if (i >= 10) return -1;
-        v |= ((uint64_t)(in[i] & 0x7F)) << shift;
-        if ((in[i] & 0x80) == 0) {
-            *value = v;
-            *consumed = i + 1;
-            return 0;
-        }
-        shift += 7;
-    }
-    return -1;
-}
 
 int pksm_encode(unsigned char *out, size_t out_cap,
                 uint32_t registration_id,

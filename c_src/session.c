@@ -2,7 +2,6 @@
 #include "dr_crypto.h"
 #include <sodium.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 
 // Finish the X3DH key derivation: SK = HKDF(salt=zeros, IKM=F||KM,
@@ -169,7 +168,7 @@ ERL_NIF_TERM process_pre_key_bundle(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
     // KM = DH1 || DH2 || DH3 [|| DH4]
     km_size = has_one_time_prekey ? 128 : 96;
-    km = malloc(km_size);
+    km = enif_alloc(km_size);
     if (!km) { err = "memory_allocation_failed"; goto cleanup; }
     memcpy(km, dh1, 32);
     memcpy(km + 32, dh2, 32);
@@ -198,7 +197,7 @@ cleanup:
     sodium_memzero(session_key, sizeof(session_key));
     if (km) {
         sodium_memzero(km, km_size);
-        free(km);
+        enif_free(km);
     }
 
     if (err) {

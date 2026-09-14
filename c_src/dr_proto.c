@@ -6,20 +6,20 @@
 // ============================================================================
 // Protobuf encode/decode for the DR wire message.
 //
+// Inner header (encrypted under the header key; see dr_serialize_header):
+//
 //   message DrMessage {
 //     bytes  ratchet_key      = 1;  // 32B sender DH pub
-//     uint32 counter          = 2;  // Nm: msg number in current sending chain
+//     uint32 counter          = 2;  // N:  msg number in current sending chain
 //     uint32 previous_counter = 3;  // PN: length of previous sending chain
-//     bytes  payload          = 4;  // nonce(12) || ChaCha20-Poly1305 output
 //   }
 //
-// The AEAD AAD is the serialized bytes of fields 1-3 only (deterministic
-// from the input values). Field 4 carries the encrypted body.
+// Serialized size is 38..46 bytes (see DR_INNER_HEADER_{MIN,MAX} in
+// dr_crypto.h). The body is not a field of this message; it travels as
+// field 2 of the outer DrEnvelope below.
 // ============================================================================
 
-// Encode an unsigned 64-bit value as protobuf varint. Returns bytes written
-// (1-10). Buffer must have at least 10 bytes.
-static size_t pb_encode_varint(unsigned char *out, uint64_t value) {
+size_t pb_encode_varint(unsigned char *out, uint64_t value) {
     size_t n = 0;
     while (value >= 0x80) {
         out[n++] = (unsigned char)((value & 0x7F) | 0x80);

@@ -58,14 +58,14 @@ version_byte(0x33)
   || mac(8)
 ```
 
-- `header_key` is derived per direction from the DR state.
-- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }`. Encrypting it hides those fields from on-path observers.
-- `message_key -> HKDF(info="WhisperMessageKeys", L=80) -> cipher_key(32) || mac_key(32) || iv(16)`. No random nonce; the IV is HKDF-derived.
-- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified before AES-CBC decrypt with `CRYPTO_memcmp` to close the padding-oracle channel.
+- `header_key` comes from the DR state (`header_key_send` / `header_key_recv`, rotated from the pre-derived `next_*` at each DH step). Both directions are currently seeded from the same 32 bytes of the X3DH output -- see `SECURITY.md`, "Known deviations".
+- `header_pb` is `DrMessage { ratchet_key=1, counter=2, previous_counter=3 }` (38..46 bytes, always padded to 48). Encrypting it hides those fields from on-path observers. The header IV is 16 random bytes shipped in the clear; the header itself carries no MAC.
+- `message_key -> HKDF(info="WhisperMessageKeys", L=80) -> cipher_key(32) || mac_key(32) || iv(16)`. The body IV is HKDF-derived, not random.
+- `mac = HMAC-SHA-256(mac_key, sender_id || receiver_id || version || outer_protobuf)` truncated to 8 bytes. Verified with `sodium_memcmp` before the *body* is AES-CBC decrypted, closing the padding-oracle channel on the body.
 
-Receive trial-decrypts `enc_header` under the current receive header key, then the next, then each MKSKIPPED entry's header key. PKCS#7 unpad + inner protobuf parse is the success oracle. MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is no longer available at lookup time.
+Receive first pins `enc_header` to exactly 64 bytes and the body to a non-zero multiple of 16, then trial-decrypts `enc_header` under the current receive header key, the next, and each MKSKIPPED entry's header key. PKCS#7 unpad + strict inner protobuf parse is the success oracle, and it runs *before* the outer MAC (the header has no MAC of its own). MKSKIPPED entries are keyed by `(header_key, message_number)` -- the unencrypted ratchet key is no longer available at lookup time. State is mutated on a stack copy and committed only after the body decrypts, so a failing message never changes the session.
 
-`MAX_SKIP = 32` per receive bounds DOS. Anything beyond returns `max_skip_exceeded`.
+`MAX_SKIP = 32` per receive bounds DOS. Anything beyond returns `too_many_skipped`.
 
 ### PreKeySignalMessage envelope
 
@@ -89,7 +89,7 @@ The `message` field carries the full inner DR `SignalMessage` (version byte + ou
 
 **Atom error vocabulary.** Every NIF returns `{ok, _} | {error, atom}`. Atoms are stable, cheap to pattern-match, and the Elixir wrapper mirrors them verbatim. The Gleam wrapper surfaces them as `Result(_, String)` because Gleam errors are strings.
 
-**No global state.** Both NIFs are stateless across calls. `init/0` on `libsignal_protocol_nif` only seeds libsodium's randomness pool. Idempotent.
+**No global state.** Both NIFs are stateless across calls. Each library calls `sodium_init()` in its own `on_load` -- they are loaded independently (the Elixir wrapper never loads `signal_nif`), so neither may assume the other ran first. `init/0` on `libsignal_protocol_nif` is a no-op probe that returns `ok`; idempotent.
 
 **Fail closed on load.** A failed `load_nif/0` returns `{error, _}` from `-on_load` so the module refuses to load. Prior to 0.2 a load failure printed a warning and returned `ok`, leaving stubs in place that would silently no-op cryptographic work. Removed.
 

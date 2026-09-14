@@ -1,13 +1,15 @@
-version: '3.8'
-
+# Invoked from the repo root via `make docker-test` / `make docker-perf` as
+# `docker compose -f docker/docker-compose.yml ...`. Compose resolves paths
+# relative to this file, so build contexts and bind mounts point at `..`.
 services:
   # Development environment
   dev:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: base
     volumes:
-      - .:/app
+      - ..:/app
       - /app/c_src/build
       - /app/priv
       - /app/tmp
@@ -18,35 +20,39 @@ services:
   # Erlang testing
   erlang-test:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: erlang-build
     volumes:
-      - ./tmp:/app/tmp
+      - ../tmp:/app/tmp
     environment:
       - CT_OPTS=--logdir=/app/tmp/ct_logs
 
   # Elixir testing
   elixir-test:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: elixir-build
     volumes:
-      - ./tmp:/app/tmp
+      - ../tmp:/app/tmp
     environment:
       - MIX_ENV=test
 
   # Gleam testing
   gleam-test:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: gleam-build
     volumes:
-      - ./tmp:/app/tmp
+      - ../tmp:/app/tmp
 
   # Production build
   production:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: production
     ports:
       - "8080:8080"
@@ -57,10 +63,11 @@ services:
   # Performance testing
   perf-test:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: base
     volumes:
-      - .:/app
+      - ..:/app
     command: sh -c "make perf-test"
     environment:
       - PERF_ITERATIONS=10000

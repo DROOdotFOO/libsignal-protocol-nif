@@ -7,42 +7,11 @@
 
 -on_load load_nif/0.
 
-%% NIF loading functions
+%% See libsignal_nif_loader for the path-resolution strategy. The fun must
+%% live in this module so erlang:load_nif/2 attaches the library here.
 -spec load_nif() -> ok | {error, term()}.
 load_nif() ->
-    %% Prefer the OTP-app-resolved priv dir (works from anywhere the
-    %% libsignal_protocol_nif beam is on the code path -- e.g. when the
-    %% Elixir/Gleam wrappers add this project's _build/default/lib/.../ebin
-    %% to their own code path for tests). Fall back to relative paths for
-    %% the rebar3-direct workflow where CWD is the project root.
-    AppPath =
-        case code:priv_dir(libsignal_protocol_nif) of
-            {error, _} ->
-                [];
-            Dir ->
-                [filename:join(Dir, "libsignal_protocol_nif")]
-        end,
-    Paths =
-        AppPath
-        ++ ["../priv/libsignal_protocol_nif",
-            "priv/libsignal_protocol_nif",
-            "./priv/libsignal_protocol_nif"],
-    load_nif_from_paths(Paths).
-
-load_nif_from_paths([]) ->
-    {error, "Could not load libsignal_protocol_nif from any path"};
-load_nif_from_paths([Path | Rest]) ->
-    case erlang:load_nif(Path, 0) of
-        ok ->
-            io:format("libsignal_protocol_nif C NIF loaded successfully from ~s~n", [Path]),
-            ok;
-        {error, {reload, _}} ->
-            io:format("libsignal_protocol_nif C NIF already loaded~n"),
-            ok;
-        {error, Reason} ->
-            io:format("Failed to load libsignal_protocol_nif C NIF from ~s: ~p~n", [Path, Reason]),
-            load_nif_from_paths(Rest)
-    end.
+    libsignal_nif_loader:load(?MODULE, fun(Path) -> erlang:load_nif(Path, 0) end).
 
 %% NIF function stubs (replaced by C implementations when NIF loads).
 %% If load_nif/0 fails, the module itself fails to load (see -on_load).

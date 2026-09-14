@@ -35,17 +35,25 @@ if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
 endif()
 find_package(OpenSSL REQUIRED)
 
-# Detect Erlang include directory automatically
+# Locate the BEAM's erl_nif.h from the erl on PATH. A missing or broken erl
+# used to yield an empty ERLANG_ROOT and a confusing include failure later;
+# fail here with the actual cause instead.
 execute_process(
   COMMAND erl -noshell -eval "io:format(\"~s\", [code:root_dir()]), halt()."
   OUTPUT_VARIABLE ERLANG_ROOT
   OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE _ERL_RESULT
 )
+if(NOT _ERL_RESULT EQUAL 0 OR ERLANG_ROOT STREQUAL "")
+  message(FATAL_ERROR "Could not run `erl` to locate the Erlang root (exit ${_ERL_RESULT}). Is Erlang/OTP on PATH?")
+endif()
 
-# Try different possible Erlang include paths
 set(ERLANG_INCLUDE_DIR "${ERLANG_ROOT}/usr/include")
-if(NOT EXISTS "${ERLANG_INCLUDE_DIR}")
+if(NOT EXISTS "${ERLANG_INCLUDE_DIR}/erl_nif.h")
   set(ERLANG_INCLUDE_DIR "${ERLANG_ROOT}/include")
+endif()
+if(NOT EXISTS "${ERLANG_INCLUDE_DIR}/erl_nif.h")
+  message(FATAL_ERROR "erl_nif.h not found under ${ERLANG_ROOT}/usr/include or ${ERLANG_ROOT}/include")
 endif()
 
 # Add include directories

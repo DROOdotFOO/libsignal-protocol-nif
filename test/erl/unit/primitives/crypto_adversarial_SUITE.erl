@@ -16,7 +16,7 @@
          adv_aes_gcm_wrong_tag_len/1, adv_aes_gcm_decrypt_plaintext_len_overflow/1,
          adv_aes_gcm_decrypt_plaintext_len_underflow/1, adv_ed25519_sign_wrong_privkey_size/1,
          adv_ed25519_verify_wrong_sig_size/1, adv_ed25519_verify_wrong_pubkey_size/1,
-         adv_hmac_empty_key/1]).
+         adv_hmac_key_lengths_rfc4231/1]).
 
 -define(ITERATIONS, 50).
 -define(SEED, {7, 11, 13}).
@@ -30,7 +30,7 @@ all() ->
      adv_ed25519_sign_wrong_privkey_size,
      adv_ed25519_verify_wrong_sig_size,
      adv_ed25519_verify_wrong_pubkey_size,
-     adv_hmac_empty_key].
+     adv_hmac_key_lengths_rfc4231].
 
 init_per_suite(Config) ->
     dr_test_helpers:nif_or_skip(Config, ?SEED).
@@ -301,20 +301,50 @@ adv_ed25519_verify_wrong_pubkey_size(_) ->
     ?assertEqual([], Findings).
 
 %% ============================================================================
-%% HMAC with empty key -- RFC 2104 permits any key length, libsodium accepts 0.
-%% This is a behavior probe, not a security finding.
+%% HMAC key length -- RFC 2104 permits any key length. libsodium's one-shot
+%% crypto_auth() reads a fixed 32-byte key, so a NIF built on it over-reads
+%% shorter keys and silently truncates longer ones. Pin the RFC semantics with
+%% RFC 4231 known-answer vectors (test cases 1-4, 6) covering 4-, 20-, 25- and
+%% 131-byte keys, plus the empty key and exact 32/64-byte keys (computed with
+%% OTP crypto:mac/4).
 %% ============================================================================
 
-adv_hmac_empty_key(_) ->
-    Data = <<"probe">>,
-    case safe_call(fun() -> signal_nif:hmac_sha256(<<>>, Data) end) of
-        {ok, Mac} when byte_size(Mac) =:= 32 ->
-            ct:pal("hmac_sha256 accepts empty key (returns 32B MAC) -- documented behavior"),
-            ok;
-        Other ->
-            ct:pal("hmac_sha256 with empty key returned: ~p", [Other]),
-            ok
-    end.
+adv_hmac_key_lengths_rfc4231(_) ->
+    Vectors =
+        [{binary:copy(<<16#0b>>, 20),
+          <<"Hi There">>,
+          "B0344C61D8DB38535CA8AFCEAF0BF12B881DC200C9833DA726E9376C2E32CFF7"},
+         {<<"Jefe">>,
+          <<"what do ya want for nothing?">>,
+          "5BDCC146BF60754E6A042426089575C75A003F089D2739839DEC58B964EC3843"},
+         {binary:copy(<<16#aa>>, 20),
+          binary:copy(<<16#dd>>, 50),
+          "773EA91E36800E46854DB8EBD09181A72959098B3EF8C122D9635514CED565FE"},
+         {list_to_binary(lists:seq(1, 25)),
+          binary:copy(<<16#cd>>, 50),
+          "82558A389A443C0EA4CC819899F2083A85F0FAA3E578F8077A2E3FF46729665B"},
+         {binary:copy(<<16#aa>>, 131),
+          <<"Test Using Larger Than Block-Size Key - Hash Key First">>,
+          "60E431591EE0B67F0D8A26AACBF5B77F8E0BC6213728C5140546040F0EE37F54"},
+         {<<>>, <<>>, "B613679A0814D9EC772F95D778C35FC5FF1697C493715653C6C712144292C5AD"},
+         {binary:copy(<<16#42>>, 32),
+          <<"probe">>,
+          "7575CBCA75C0B3B818367231A02EFC1B40B0E6C20D9E3EF5453EFE0FA7AD5AEE"},
+         {binary:copy(<<16#42>>, 64),
+          <<"probe">>,
+          "8B56F78B2959F750AF7ACD18B58AD0FC174541DF842FA9DA203A978845E1B817"}],
+    Mismatches =
+        lists:filtermap(fun({Key, Data, Hex}) ->
+                           Expected = binary:decode_hex(list_to_binary(Hex)),
+                           case safe_call(fun() -> signal_nif:hmac_sha256(Key, Data) end) of
+                               {ok, Expected} ->
+                                   false;
+                               Other ->
+                                   {true, {byte_size(Key), Other}}
+                           end
+                        end,
+                        Vectors),
+    ?assertEqual([], Mismatches).
 
 %% ============================================================================
 %% Helpers

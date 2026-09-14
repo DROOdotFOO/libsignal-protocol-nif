@@ -117,7 +117,7 @@ jobs:
       uses: erlef/setup-beam@v1.24.0
       with:
         otp-version: '26.2'
-        elixir-version: '1.15.7'
+        elixir-version: '1.16.3'
         rebar3-version: '3.22.1'
         install-hex: true
         install-rebar: true
@@ -233,7 +233,7 @@ jobs:
       uses: erlef/setup-beam@v1.24.0
       with:
         otp-version: '26.2'
-        elixir-version: '1.15.7'
+        elixir-version: '1.16.3'
         rebar3-version: '3.22.1'
         install-hex: true
         install-rebar: true

@@ -39,7 +39,7 @@ ok = signal_nif:verify_signature(Ed25519Pub, Message, Sig).
 ```erlang
 {ok, Hash}   = signal_nif:sha256(Data).      %% 32 bytes
 {ok, Hash}   = signal_nif:sha512(Data).      %% 64 bytes
-{ok, Mac}    = signal_nif:hmac_sha256(Key, Data). %% 32 bytes, key any length
+{ok, Mac}    = signal_nif:hmac_sha256(Key, Data). %% 32 bytes; key any length (RFC 2104)
 ```
 
 ### AES-GCM
@@ -49,21 +49,24 @@ ok = signal_nif:verify_signature(Ed25519Pub, Message, Sig).
 {ok, Pt}      = signal_nif:aes_gcm_decrypt(Key, IV, Ct, AAD, Tag, PlaintextLen).
 ```
 
-- `Key`: 16, 24, or 32 bytes (AES-128/192/256).
-- `IV`: 12 bytes.
+- `Key`: exactly 32 bytes (AES-256 only; libsodium's `crypto_aead_aes256gcm_*`).
+- `IV`: exactly 12 bytes.
 - `AAD`: any length, may be `<<>>`.
-- `TagLen`: 12-16. Decrypt requires the exact tag.
+- `TagLen`: must be 16. `Tag` on decrypt must be exactly 16 bytes.
+- `PlaintextLen` on decrypt must equal `byte_size(Ct)`.
+- Any other size returns `{error, invalid_parameters}`. `{error, aes_gcm_not_available}` when libsodium's hardware-accelerated AES-GCM is unavailable on the host CPU (it has no software fallback).
 - Decrypt failure returns `{error, decryption_failed}` -- includes failed tag verification.
 
 ## libsignal_protocol_nif
 
-Signal Protocol module. Call `init/0` once per VM before using anything else.
+Signal Protocol module. libsodium is initialised when the NIF loads (`-on_load`); a failed `sodium_init()` makes the module refuse to load, so no per-VM setup call is required.
 
 ### Lifecycle
 
 ```erlang
 ok = libsignal_protocol_nif:init().
-%% Initializes libsodium. Returns {error, libsodium_init_failed} on failure.
+%% Optional. Always returns ok once the module has loaded; kept for callers
+%% that want an explicit "is the NIF present" probe. Idempotent.
 ```
 
 ### Identity and pre-keys
@@ -73,21 +76,27 @@ ok = libsignal_protocol_nif:init().
 %% IdPub: 32B Ed25519 pub. IdPriv: 64B Ed25519 secret-key encoding.
 
 {ok, {KeyId, PreKeyPub}} = libsignal_protocol_nif:generate_pre_key(KeyId).
-%% PreKeyPub: 32B X25519.
+%% PreKeyPub: 32B X25519. The private half is generated and discarded -- this
+%% function cannot produce a pre-key Bob can later use in
+%% process_pre_key_bundle_bob/5. Use signal_nif:generate_curve25519_keypair/0
+%% and keep the private key yourself (see test/erl/unit/protocol/pksm_SUITE.erl).
 
 {ok, {KeyId, SpkPub, Sig}} =
     libsignal_protocol_nif:generate_signed_pre_key(IdPriv, KeyId).
-%% SpkPub: 32B X25519. Sig: 64B Ed25519 over SpkPub.
+%% SpkPub: 32B X25519. Sig: 64B Ed25519 over SpkPub. Same caveat: the SPK
+%% private key is discarded. Generate the pair with
+%% signal_nif:generate_curve25519_keypair/0 and sign SpkPub with
+%% signal_nif:sign_data/2 instead.
 ```
 
 ### Simple session (ChaCha20-Poly1305)
 
-A static-key AEAD session. Real Signal flows should use the Double Ratchet below; this is here for callers who already have a DH-derived shared key and want a one-shot encrypted channel. Not exposed in the Elixir or Gleam wrappers.
+A static-key AEAD session. Real Signal flows should use the Double Ratchet below; this is here for callers who already have a DH-derived shared key and want a one-shot encrypted channel. The Gleam wrapper does not expose it; the Elixir wrapper still does via `LibsignalProtocol.create_session/2`.
 
 ```erlang
 {ok, Session} =
     libsignal_protocol_nif:create_session(LocalPriv32, RemotePub32).
-%% Session: binary containing the derived 32B key (first 32 bytes are the key).
+%% Session: 64-byte binary; the first 32 bytes are the derived key.
 
 {ok, Envelope}  = libsignal_protocol_nif:encrypt_message(Session, Plaintext).
 %% Envelope: nonce(12) || ChaCha20-Poly1305(plaintext) || tag(16).
@@ -95,7 +104,9 @@ A static-key AEAD session. Real Signal flows should use the Double Ratchet below
 {ok, Plaintext} = libsignal_protocol_nif:decrypt_message(Session, Envelope).
 ```
 
-Errors: `invalid_session` (less than 32 bytes), `invalid_message` (envelope too short), `encryption_failed`, `decryption_failed`.
+Both peers derive the same key and use it in both directions, there is no AAD, the nonce is 12 random bytes per message, and there is no counter. Consequences: a ciphertext one side produced also decrypts on that same side (no direction binding), messages can be replayed, and the random nonce has a birthday bound of about 2^32 messages per session. Use the Double Ratchet for anything beyond a one-shot exchange.
+
+Errors: `invalid_key_sizes` (inputs not 32 bytes), `key_agreement_failed`, `invalid_session` (session shorter than 32 bytes), `invalid_message` (envelope too short), `encryption_failed`, `decryption_failed`.
 
 ### X3DH
 
@@ -105,7 +116,7 @@ Alice's side. The `Bundle` is the wire form Bob publishes:
 id_pub(32) || spk_pub(32) || signature(64) [|| opk_pub(32)]
 ```
 
-`signature` is Ed25519 over `spk_pub` under Bob's identity key. The trailing OPK is optional.
+`signature` is Ed25519 over `spk_pub` under the identity key carried in the same bundle. That is X3DH as specified -- the bundle is self-describing and trust in `id_pub` comes from out-of-band identity verification, which is the embedder's job. The trailing OPK is optional; any bundle of 160 bytes or more is read as having one, and 128..159-byte or over-long bundles are not rejected (only the first 128 or 160 bytes are used).
 
 ```erlang
 {ok, {SharedSecret96, AliceEphPub32}} =
@@ -128,7 +139,7 @@ Bob's side reconstructs the same shared secret from the values he stored plus th
 
 Pass `<<>>` for `BobOpkPriv` when no one-time prekey was consumed.
 
-Errors: `invalid_bundle`, `invalid_signature`, `signature_verification_failed`, `bundle_too_short`, `invalid_shared_secret_size`.
+Errors (Alice): `invalid_local_identity_key_size`, `invalid_bundle_size` (under 128 bytes), `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `signature_verification_failed`, `ephemeral_key_generation_failed`, `dh1_calculation_failed` .. `dh4_calculation_failed`, `kdf_failed`, `memory_allocation_failed`. Errors (Bob): `invalid_identity_priv_size`, `invalid_signed_pre_key_priv_size`, `invalid_one_time_pre_key_priv_size`, `invalid_remote_identity_pub_size`, `invalid_remote_ephemeral_pub_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `dh1_calculation_failed` .. `dh4_calculation_failed`, `kdf_failed`.
 
 ### Double Ratchet
 
@@ -142,7 +153,7 @@ Errors: `invalid_bundle`, `invalid_signature`, `signature_verification_failed`, 
         IsAlice).          %% 1 for the initiator, 0 for the responder
 ```
 
-Both identity pubs are folded into the per-message MAC scope. Alice passes `<<>>` for her own priv because she uses a fresh ephemeral for the first DH; Bob needs his Ed25519 secret to derive the initial ratchet pair.
+Both identity pubs are folded into the per-message MAC scope. Alice passes `<<>>` for her own priv because she uses a fresh ephemeral for the first DH; Bob needs his Ed25519 secret because his *identity* key (converted to X25519) is his initial ratchet key -- a deviation from the Signal spec, which uses the signed pre-key (see `SECURITY.md`).
 
 Encrypt and decrypt advance the session; the returned `NewSession` replaces the old one:
 
@@ -163,7 +174,9 @@ version_byte(0x33)
   || mac(8)   %% HMAC-SHA-256 over sender_id||receiver_id||version||outer protobuf
 ```
 
-The receiver trial-decrypts `enc_header` against the current header key, the next header key, and MKSKIPPED entries. MKSKIPPED is a 32-slot LRU; per-receive `MAX_SKIP=32`. Errors: `malformed_message`, `mac_verification_failed`, `max_skip_exceeded`, `invalid_session_size`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives).
+The receiver trial-decrypts `enc_header` against the current header key, the next header key, and MKSKIPPED entries. MKSKIPPED is a 32-slot LRU; per-receive `MAX_SKIP=32`. `enc_header` is always exactly 64 bytes (`iv(16) || 48` bytes of AES-CBC); any other length is rejected as `malformed_message` before any key is used.
+
+Errors: `invalid_session_size`, `session_not_initialized`, `must_receive_first` (Bob trying to encrypt before Alice's first message arrives), `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac` (no candidate header key decrypts the header, or the outer MAC fails), `too_many_skipped` (the header's counters imply more than `MAX_SKIP` skipped messages), `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`.
 
 ### PreKeySignalMessage envelope
 
@@ -184,46 +197,54 @@ Bob decodes the envelope, recovers the X3DH shared secret, initializes his DR si
 {ok, {RegistrationId, BaseKey32, IdKey32, OpkId, SpkId, InnerWire}} =
     libsignal_protocol_nif:pksm_decode(WireBytes).
 %% OpkId is an integer or undefined.
-%% IdKey is Alice's identity pub in X25519 (DJB) form.
+%% IdKey is Alice's identity pub in X25519 (DJB) form. dr_init/5 and
+%% process_pre_key_bundle_bob/5 need the Ed25519 form, which is not
+%% recoverable from this field -- Bob must obtain Alice's Ed25519 identity
+%% pub out of band (e.g. from her published bundle) for now.
 ```
 
-Errors: `malformed_message`, `unsupported_version`.
+Errors: `malformed_message` (bad version byte, truncated, or unparseable protobuf). `dr_encrypt_prekey/3` additionally returns `pksm_encode_failed`.
+
+A PreKeySignalMessage carries no freshness on its own: if Bob does not delete the one-time pre-key it consumed (or the message used none), the same envelope can be replayed to re-derive the session and re-decrypt the first message. Delete OPKs on first use.
 
 ## Error atoms
 
-Atoms the NIFs actually return today. Treat any unfamiliar atom as fatal; cryptographic operations don't have recoverable error modes.
+Every atom the NIFs return today, grouped by origin. Treat any unfamiliar atom as fatal; cryptographic operations don't have recoverable error modes. Wrong-type arguments (non-binary where a binary is expected, non-integer ids) raise `badarg` instead.
 
-| Atom                                                 | Origin                                     |
-| ---------------------------------------------------- | ------------------------------------------ |
-| `libsodium_init_failed`                              | `init/0`                                   |
-| `invalid_signature`, `signature_verification_failed` | sign/verify, X3DH                          |
-| `invalid_bundle`, `bundle_too_short`                 | `process_pre_key_bundle/2`                 |
-| `invalid_shared_secret_size`                         | `dr_init/5` (must be 96 bytes)             |
-| `invalid_session`, `invalid_session_size`            | session API, DR                            |
-| `invalid_message`, `malformed_message`               | simple session, DR, PKSM decode            |
-| `mac_verification_failed`                            | DR decrypt                                 |
-| `max_skip_exceeded`                                  | DR receive (too many skipped messages)     |
-| `must_receive_first`                                 | Bob's encrypt before Alice's first message |
-| `decryption_failed`, `encryption_failed`             | AES-GCM, simple session                    |
-| `unsupported_version`                                | PKSM decode                                |
+| Origin | Atoms |
+| --- | --- |
+| `signal_nif` keygen | `key_generation_failed` |
+| `signal_nif` sign / verify | `invalid_private_key`, `signing_failed`, `invalid_public_key`, `invalid_signature` |
+| `signal_nif` key conversion | `invalid_secret_key_size`, `invalid_public_key_size`, `conversion_failed` |
+| `signal_nif` HMAC | `hmac_failed` |
+| `signal_nif` AES-GCM | `invalid_parameters`, `aes_gcm_not_available`, `memory_allocation_failed`, `encryption_failed`, `decryption_failed` |
+| `generate_*_pre_key` | `key_generation_failed`, `invalid_identity_key_size`, `signature_failed` |
+| simple session | `invalid_key_sizes`, `key_agreement_failed`, `invalid_session`, `invalid_message`, `encryption_failed`, `decryption_failed` |
+| `process_pre_key_bundle/2` | `invalid_local_identity_key_size`, `invalid_bundle_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `signature_verification_failed`, `ephemeral_key_generation_failed`, `dh1_calculation_failed`, `dh2_calculation_failed`, `dh3_calculation_failed`, `dh4_calculation_failed`, `kdf_failed`, `memory_allocation_failed` |
+| `process_pre_key_bundle_bob/5` | `invalid_identity_priv_size`, `invalid_signed_pre_key_priv_size`, `invalid_one_time_pre_key_priv_size`, `invalid_remote_identity_pub_size`, `invalid_remote_ephemeral_pub_size`, `identity_priv_conversion_failed`, `identity_pub_conversion_failed`, `dh1_calculation_failed` .. `dh4_calculation_failed`, `kdf_failed` |
+| `dr_init/5` | `invalid_shared_secret_size`, `invalid_identity_pub_size`, `invalid_self_priv_size`, `identity_pub_conversion_failed`, `identity_priv_conversion_failed`, `key_generation_failed`, `dh_failed`, `kdf_failed` |
+| `dr_encrypt/2`, `dr_encrypt_prekey/3` | `invalid_session_size`, `session_not_initialized`, `must_receive_first`, `kdf_failed`, `encryption_failed`, `mac_failed`, `memory_allocation_failed`, `pksm_encode_failed` |
+| `dr_decrypt/2` | `invalid_session_size`, `session_not_initialized`, `message_too_short`, `unsupported_version`, `malformed_message`, `bad_mac`, `too_many_skipped`, `dh_ratchet_failed`, `kdf_failed`, `decryption_failed`, `mac_failed`, `memory_allocation_failed` |
+| `pksm_decode/1` | `malformed_message` |
 
 ## Sizes
 
-| Item                    | Size                              |
-| ----------------------- | --------------------------------- | --- | --------------- |
-| Curve25519 / X25519 key | 32 bytes                          |
-| Ed25519 public key      | 32 bytes                          |
-| Ed25519 private key     | 64 bytes (libsodium SK encoding)  |
-| Ed25519 signature       | 64 bytes                          |
-| SHA-256 / HMAC-SHA-256  | 32 bytes                          |
-| SHA-512                 | 64 bytes                          |
-| AES key                 | 16 / 24 / 32 bytes                |
-| AES-GCM IV              | 12 bytes                          |
-| AES-GCM tag             | 12-16 bytes                       |
-| X3DH shared secret      | 96 bytes (64B SK                  |     | 32B DR-HE seed) |
-| DR session blob         | ~2.6 KB (MKSKIPPED + DR-HE state) |
-| DR MAC                  | 8 bytes (truncated HMAC-SHA-256)  |
-| PreKeyBundle wire       | 128 bytes minimum (160 with OPK)  |
+| Item                    | Size                                     |
+| ----------------------- | ---------------------------------------- |
+| Curve25519 / X25519 key | 32 bytes                                 |
+| Ed25519 public key      | 32 bytes                                 |
+| Ed25519 private key     | 64 bytes (libsodium SK encoding)         |
+| Ed25519 signature       | 64 bytes                                 |
+| SHA-256 / HMAC-SHA-256  | 32 bytes                                 |
+| SHA-512                 | 64 bytes                                 |
+| AES-GCM key             | 32 bytes (AES-256 only)                  |
+| AES-GCM IV              | 12 bytes                                 |
+| AES-GCM tag             | 16 bytes                                 |
+| X3DH shared secret      | 96 bytes (64B SK \|\| 32B DR-HE seed)    |
+| DR session blob         | `sizeof(double_ratchet_state_t)`, ~2.6 KB; layout is compiler/ABI-specific, see `SECURITY.md` |
+| DR MAC                  | 8 bytes (truncated HMAC-SHA-256)         |
+| DR `enc_header`         | 64 bytes (iv 16 \|\| AES-CBC 48)         |
+| PreKeyBundle wire       | 128 bytes (160 with OPK)                 |
 
 ## End-to-end flow
 

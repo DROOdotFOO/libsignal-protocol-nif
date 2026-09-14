@@ -1,14 +1,8 @@
 #include <erl_nif.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <limits.h>
-#include <time.h>
 #include <stdbool.h>
 #include <sodium.h>
-#include <openssl/evp.h>
-#include <openssl/crypto.h>
-#include <openssl/params.h>
 #include "dr.h"
 #include "dr_chain.h"
 #include "dr_crypto.h"
@@ -19,16 +13,19 @@
 #define DR_SIGNAL_VERSION 3
 #define DR_VERSION_BYTE ((DR_SIGNAL_VERSION << 4) | DR_SIGNAL_VERSION)  // 0x33
 
-// Double Ratchet init (per Signal DR spec section 3.3).
-// Args: SharedSecret(64), LocalIdentityPub(32), RemoteIdentityPub(32),
-//       SelfIdentityPriv(32 or 64), IsAlice(int).
+// Double Ratchet init (per Signal DR spec section 3.3, with the deviations
+// noted in docs/SECURITY.md).
+// Args: SharedSecret(96 = X3DH SK(64) || header-key seed(32)),
+//       LocalIdentityPub(32), RemoteIdentityPub(32),
+//       SelfIdentityPriv(64 for Bob, <<>> for Alice), IsAlice(int).
 // LocalIdentityPub and RemoteIdentityPub are Ed25519 pubs; they are converted
 // to X25519 and stored in state for use as the Signal-spec MAC binding (every
 // message MAC is HMAC(macKey, local_id || remote_id || version || proto)).
-// Alice: SelfIdentityPriv may be empty (she uses a fresh ephemeral for DH).
-//   She does an initial send ratchet against the remote pub.
-// Bob:   SelfIdentityPriv must be his Ed25519 64B secret. He stores it as
-//   his initial DH ratchet pair; send_chain_key is derived on first receive.
+// Alice: SelfIdentityPriv is ignored (she uses a fresh ephemeral for DH).
+//   She does an initial send ratchet against Bob's converted identity pub.
+// Bob:   SelfIdentityPriv must be his Ed25519 64B secret. Its X25519 form is
+//   his initial DH ratchet pair (spec uses SPK_B); send_chain_key is derived
+//   on first receive.
 ERL_NIF_TERM dr_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     if (argc != 5) {
@@ -212,6 +209,9 @@ static const char *dr_encrypt_core(double_ratchet_state_t *state,
         err = "encryption_failed"; goto cleanup;
     }
     enc_header_len = 16 + header_ct_len;
+    // Mirror of the receiver's pin: a legitimate header is always exactly
+    // DR_ENC_HEADER_LEN. Refuse to emit anything the peer would reject.
+    if (enc_header_len != DR_ENC_HEADER_LEN) { err = "encryption_failed"; goto cleanup; }
 
     // Outer envelope protobuf: {enc_header = 1, ciphertext = 2}.
     // Max overhead: 2 tags + 2 varints = 22 bytes.
@@ -450,7 +450,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     const char *err = NULL;
     double_ratchet_state_t state;
-    unsigned char header_plain[64];
+    unsigned char header_plain[DR_HEADER_PLAIN_CAP];
     unsigned char message_key[DR_MESSAGE_KEY_SIZE];
     unsigned char cipher_key[32], mac_key[32], iv[16];
     unsigned char expected_mac[DR_MAC_LEN];
@@ -482,6 +482,12 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (body_ct_len == 0 || (body_ct_len % 16) != 0) {
         err = "message_too_short"; goto cleanup;
     }
+    // A legitimate sender always emits exactly DR_ENC_HEADER_LEN bytes
+    // (see dr_crypto.h). Reject anything else here, before any header key
+    // is touched, so oversized headers cost no crypto work.
+    if (enc_header_len != DR_ENC_HEADER_LEN) {
+        err = "malformed_message"; goto cleanup;
+    }
 
     // Trial-decrypt enc_header under each candidate header_key.
     enum { PATH_CURRENT, PATH_RATCHET, PATH_SKIPPED } path = PATH_CURRENT;
@@ -491,13 +497,15 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int found = 0;
 
     if (hk_is_nonzero(state.header_key_recv) &&
-        dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+        dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                              &header_plain_len, &inner,
                               enc_header, enc_header_len,
                               state.header_key_recv) == 0) {
         path = PATH_CURRENT;
         found = 1;
     } else if (hk_is_nonzero(state.next_header_key_recv) &&
-               dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+               dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                                     &header_plain_len, &inner,
                                      enc_header, enc_header_len,
                                      state.next_header_key_recv) == 0) {
         path = PATH_RATCHET;
@@ -505,7 +513,8 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     } else {
         for (int i = 0; i < MAX_SKIPPED_KEYS; i++) {
             if (!state.mkskipped[i].occupied) continue;
-            if (dr_try_decrypt_header(header_plain, &header_plain_len, &inner,
+            if (dr_try_decrypt_header(header_plain, sizeof(header_plain),
+                                      &header_plain_len, &inner,
                                       enc_header, enc_header_len,
                                       state.mkskipped[i].header_key) == 0) {
                 // Locate the slot matching this (header_key, counter) tuple.
@@ -574,7 +583,7 @@ ERL_NIF_TERM dr_decrypt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                        DR_VERSION_BYTE, envelope, envelope_len) != 0) {
         err = "mac_failed"; goto cleanup;
     }
-    if (CRYPTO_memcmp(expected_mac, received_mac, DR_MAC_LEN) != 0) {
+    if (sodium_memcmp(expected_mac, received_mac, DR_MAC_LEN) != 0) {
         err = "bad_mac"; goto cleanup;
     }
 

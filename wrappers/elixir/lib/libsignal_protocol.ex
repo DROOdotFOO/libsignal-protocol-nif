@@ -10,7 +10,7 @@ defmodule LibsignalProtocol do
 
   @nif :libsignal_protocol_nif
 
-  @spec init() :: :ok | {:error, atom()}
+  @spec init() :: :ok
   def init do
     :code.ensure_loaded(@nif)
     @nif.init()

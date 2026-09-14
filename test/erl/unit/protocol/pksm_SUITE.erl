@@ -13,7 +13,7 @@
 %%   3. dr_init/5 (as Bob)
 %%   4. dr_decrypt/2 on the inner DR message
 %%
-%% Tests assume the NIF is loaded; init_per_suite gates on signal_nif:test_crypto/0.
+%% Tests assume the NIF is loaded; init_per_suite gates on dr_test_helpers:nif_or_skip/2.
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").

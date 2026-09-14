@@ -28,12 +28,7 @@ all() ->
      dr_state_grows_for_header_keys].
 
 init_per_suite(Config) ->
-    case signal_nif:test_crypto() of
-        crypto_ok ->
-            Config;
-        Other ->
-            {skip, {nif_init_failed, Other}}
-    end.
+    dr_test_helpers:nif_or_skip(Config, {17, 19, 23}).
 
 end_per_suite(_Config) ->
     ok.
